@@ -52,6 +52,9 @@ class Settings:
     width: int = 1280
     height: int = 720
     fps: int = 30
+    # Privacy: master switch, and only open the real camera while an app is using TuxLens
+    camera_enabled: bool = True
+    on_demand: bool = True
     # Source: "phone" or a local V4L2 camera id (/dev/v4l/by-id/… or /dev/videoN)
     source: str = "phone"
     # Phone camera

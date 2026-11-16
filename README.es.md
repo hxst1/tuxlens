@@ -37,6 +37,10 @@ Chrome tiene las mismas APIs web, pero está sin probar.
 - **También webcams.** Elige cualquier cámara USB o integrada en vez del móvil y conserva todos los
   efectos. Los controles propios de la cámara (exposición, enfoque, balance de blancos, zoom
   óptico…) aparecen en el panel si los tiene.
+- **Privacidad primero.** La cámara real solo se abre mientras una app usa TuxLens (o el panel está
+  abierto), así que el LED de la webcam se comporta como el de una webcam normal y la webcam queda
+  libre para las apps que la usan directamente. El interruptor del panel, `tuxlens off` o el clic
+  derecho en el icono de la barra la apagan del todo; las apps ven entonces «Cámara apagada».
 - **Integración con el escritorio.** Panel GTK4 con vista previa en vivo, módulo para waybar, CLI y
   una imagen de «cámara en pausa» para que Meet no pierda la cámara cuando el móvil se va.
 - **Temas.** Todo (panel, página del móvil, icono de la barra, imagen de pausa) sale de un pequeño
@@ -139,6 +143,7 @@ tuxlens source webcam          # o: tuxlens source phone, tuxlens source (lista)
 tuxlens effect blur            # none | blur | image ~/Imágenes/oficina.jpg
 tuxlens set framing=true fps=60 capture=720p mic=true
 tuxlens theme catppuccin-mocha
+tuxlens off                    # interruptor de privacidad (tuxlens on / tuxlens toggle)
 tuxlens approve                # aceptar una solicitud de emparejamiento
 tuxlens reload-phone           # recargar la página del móvil tras actualizar
 ```
@@ -154,13 +159,14 @@ tuxlens reload-phone           # recargar la página del móvil tras actualizar
     "interval": 60,
     "signal": 13,
     "tooltip": true,
-    "on-click": "~/.local/bin/tuxlens panel"
+    "on-click": "~/.local/bin/tuxlens panel",
+    "on-click-right": "~/.local/bin/tuxlens toggle"
 }
 ```
 
 Luego `tuxlens set waybar_signal=13` para que el daemon refresque el icono en cuanto cambie su
 estado. Para una barra de texto, `tuxlens waybar` imprime JSON con un glifo Nerd Font y una `class`
-(`idle`, `waiting`, `live`, `pairing`, `error`, `off`).
+(`idle`, `waiting`, `live`, `pairing`, `error`, `disabled`, `off`).
 
 ## Temas
 

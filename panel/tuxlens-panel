@@ -67,6 +67,10 @@ STRINGS = {
         "mic": "Micrófono del iPhone", "mic_hint": "En Meet elige «TuxLens» como micrófono",
         "mic_live": "Enviando audio", "effects": "Efectos",
         "audio_settings": "Ajustes de audio", "audio": "Audio",
+        "camera_switch": "Encender o apagar la cámara", "camera_off": "Cámara apagada",
+        "busy": "La webcam la está usando otra aplicación",
+        "ready": "Lista: se encenderá cuando una app use la cámara",
+        "on_demand": "Encender solo cuando una app la use", "on_demand_hint": "El LED de la webcam solo se enciende en las llamadas",
         "source": "Fuente", "not_connected": "sin conectar", "cam_settings": "Ajustes de la cámara",
         "digital": "Zoom digital",
         "ctl": {"zoom_absolute": "Zoom óptico", "focus_automatic_continuous": "Enfoque automático",
@@ -98,6 +102,10 @@ STRINGS = {
         "mic": "Phone microphone", "mic_hint": "Pick «TuxLens» as the microphone in Meet",
         "mic_live": "Sending audio", "effects": "Effects",
         "audio_settings": "Audio settings", "audio": "Audio",
+        "camera_switch": "Turn the camera on or off", "camera_off": "Camera off",
+        "busy": "Another app is using the webcam",
+        "ready": "Ready: turns on when an app uses the camera",
+        "on_demand": "Only on while an app uses it", "on_demand_hint": "The webcam light only comes on during calls",
         "source": "Source", "not_connected": "not connected", "cam_settings": "Camera settings",
         "digital": "Digital zoom",
         "ctl": {"zoom_absolute": "Optical zoom", "focus_automatic_continuous": "Autofocus",
@@ -379,6 +387,10 @@ class Panel(Gtk.Application):
         sub.append(self.subtitle)
         texts.append(sub)
         header.append(texts)
+        self.camera_switch = Gtk.Switch(valign=Gtk.Align.CENTER, tooltip_text=S["camera_switch"])
+        self.camera_switch.connect("state-set", lambda _s, on: (self.set({"camera_enabled": on})
+                                                                if not self._updating else None, False)[1])
+        header.append(self.camera_switch)
         close = Gtk.Button(icon_name="window-close-symbolic", valign=Gtk.Align.CENTER, tooltip_text=S["close"])
         close.connect("clicked", lambda _b: self.quit())
         header.append(close)
@@ -423,6 +435,16 @@ class Panel(Gtk.Application):
         self.source_drop.connect("notify::selected", self.on_source)
         source_row.append(self.source_drop)
         sec.append(source_row)
+        demand_row = Gtk.Box(spacing=10, margin_bottom=6)
+        demand_row.add_css_class("row")
+        demand_texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True)
+        demand_texts.append(label(S["on_demand"], ellipsize=True))
+        demand_texts.append(label(S["on_demand_hint"], "muted", ellipsize=True))
+        demand_row.append(demand_texts)
+        self.on_demand = Gtk.Switch(valign=Gtk.Align.CENTER)
+        self.on_demand.connect("state-set", lambda _s, on: (self.set({"on_demand": on}) if not self._updating else None, False)[1])
+        demand_row.append(self.on_demand)
+        sec.append(demand_row)
         self.cameras = Segmented([(k, S[k]) for k in CAMERA_ORDER], lambda k: self.set({"camera": k}))
         sec.append(self.cameras)
 
@@ -820,7 +842,11 @@ class Panel(Gtk.Application):
         phone = st["phone"]
         stats = st["stats"]
         state = st["state"]
-        if state == "error":
+        local_err = (st.get("local") or {}).get("error")
+        if local_err == "busy" and state not in ("live", "holding"):
+            self.subtitle.set_text(S["busy"])
+            self.dot.add_css_class("error")
+        elif state == "error":
             self.subtitle.set_text(f"{S['error']}: {st.get('error')}")
             self.dot.add_css_class("error")
         elif state in ("live", "holding"):
@@ -834,6 +860,10 @@ class Panel(Gtk.Application):
             src = st.get("source", "")
             self.stats.set_text(f"{stats['fps_out']:.0f} fps · {S['latency']} {total:.0f} ms · "
                                 f"{(ph.get('kbps') or 0) / 1000:.1f} Mbps · {src.split(' ')[0]}")
+        elif not (st.get("camera") or {}).get("enabled", True):
+            self.subtitle.set_text(S["camera_off"])
+        elif not (st.get("camera") or {}).get("active", True):
+            self.subtitle.set_text(S["ready"])
         elif phone.get("connected"):
             self.subtitle.set_text(S["connected"])
             self.dot.add_css_class("connected")
@@ -842,6 +872,10 @@ class Panel(Gtk.Application):
         if state not in ("live", "holding"):
             self.stats.set_text("")
 
+        cam = st.get("camera") or {}
+        self.camera_switch.set_active(bool(cam.get("enabled", True)))
+        self.on_demand.set_active(bool(cam.get("on_demand", True)))
+        self.preview_empty.set_text(S["camera_off"] if not cam.get("enabled", True) else S["no_preview"])
         local = s.get("source", "phone") != "phone"
         self.show_sources(st.get("sources") or [], s.get("source", "phone"))
         available = set(phone.get("available") or []) or None

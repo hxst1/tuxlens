@@ -154,6 +154,7 @@ class OutputThread(threading.Thread):
         self.preview_lock = threading.Lock()
         self.preview: np.ndarray | None = None   # latest output frame, for the panel
         self.state = "idle"
+        self.camera_off = False          # privacy switch: placeholder says "camera off"
         self.phone_rotation = 0          # display rotation the phone attaches to its frames
         self.phone_flip = False
         self._writer: LoopbackWriter | None = None
@@ -180,8 +181,9 @@ class OutputThread(threading.Thread):
     def _placeholder_bytes(self) -> bytes:
         if self._placeholder is None:
             w = self._writer
-            self._placeholder = placeholder.render_i420(w.width, w.height, self.theme_getter(),
-                                                        self.settings.extra.get("placeholder_text"),
+            text = (placeholder.off_text(self.settings.language) if self.camera_off
+                    else self.settings.extra.get("placeholder_text"))
+            self._placeholder = placeholder.render_i420(w.width, w.height, self.theme_getter(), text,
                                                         self.settings.language)
         return self._placeholder
 

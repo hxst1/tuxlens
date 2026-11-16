@@ -14,6 +14,15 @@ TEXTS = {"es": "Cámara en pausa", "en": "Camera paused", "fr": "Caméra en paus
          "de": "Kamera pausiert", "it": "Fotocamera in pausa", "pt": "Câmera em pausa"}
 
 
+OFF_TEXTS = {"es": "Cámara apagada", "en": "Camera off", "fr": "Caméra éteinte", "de": "Kamera aus",
+             "it": "Fotocamera spenta", "pt": "Câmera desligada"}
+
+
+def off_text(language: str | None = None) -> str:
+    code = system_language() if not language or language == "auto" else language[:2]
+    return OFF_TEXTS.get(code, OFF_TEXTS["en"])
+
+
 def system_language() -> str:
     for var in ("LC_ALL", "LC_MESSAGES", "LANG"):
         value = os.environ.get(var)

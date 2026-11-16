@@ -153,6 +153,8 @@ def cmd_waybar(args) -> None:
         state = "live" if st["state"] in ("live", "holding") else ("waiting" if phone.get("connected") else "idle")
         if st["state"] == "error":
             state = "error"
+        if not (st.get("camera") or {}).get("enabled", True):
+            state = "disabled"
         if st.get("pair_requests"):
             state = "pairing"
     lang = settings.get("language", "auto")
@@ -183,15 +185,17 @@ WAYBAR_TEXTS = {
     "es": {"live": "TuxLens · {camera} · {fps} fps · {ms} ms", "waiting": "TuxLens · iPhone conectado, iniciando cámara",
            "idle": "TuxLens · esperando al iPhone", "off": "TuxLens · servicio parado",
            "pairing": "TuxLens · {name} ({address}) quiere conectarse: pulsa para aceptar",
+           "disabled": "TuxLens · cámara apagada (clic derecho para encenderla)",
            "error": "TuxLens · {error}"},
     "en": {"live": "TuxLens · {camera} · {fps} fps · {ms} ms", "waiting": "TuxLens · phone connected, starting camera",
            "idle": "TuxLens · waiting for the phone", "off": "TuxLens · service stopped",
            "pairing": "TuxLens · {name} ({address}) wants to connect: click to accept",
+           "disabled": "TuxLens · camera off (right-click to turn it on)",
            "error": "TuxLens · {error}"},
 }
 # Nerd Font glyphs (md-webcam / md-webcam_off) for bars that show text.
 GLYPHS = {"live": "\U000f05a0", "waiting": "\U000f05a0", "idle": "\U000f05a0", "error": "\U000f05a0",
-          "pairing": "\U000f05a0", "off": "\U000f1737"}
+          "pairing": "\U000f05a0", "off": "\U000f1737", "disabled": "\U000f1737"}
 
 
 def waybar_icon(state: str, theme_id: str | None) -> str:
@@ -218,7 +222,7 @@ def waybar_icon(state: str, theme_id: str | None) -> str:
     else:
         svg.append(f'<g fill="none" stroke="{ink}" stroke-width="1.6" stroke-linejoin="round">'
                    f'<path d="{body}"/><path d="{lens}"/></g>')
-    if state == "off":
+    if state in ("off", "disabled"):
         svg.append(f'<path stroke="{ink}" stroke-width="1.6" stroke-linecap="round" d="M3.5 3.5l17 17"/>')
     dot = {"live": active, "waiting": ink, "error": c["danger"]}.get(state)
     if state == "pairing":   # ring = "someone is asking": open the panel to accept
@@ -265,6 +269,12 @@ def main() -> None:
     s = sub.add_parser("pair", help="show the pairing QR code")
     s.add_argument("--reset", action="store_true", help="new token: disconnects paired phones")
     s.set_defaults(func=cmd_pair)
+    for name, value in (("on", True), ("off", False)):
+        s = sub.add_parser(name, help=f"turn the camera {name} (privacy switch)")
+        s.set_defaults(func=lambda a, v=value: call("POST", "/settings", {"camera_enabled": v}))
+    s = sub.add_parser("toggle", help="turn the camera on/off")
+    s.set_defaults(func=lambda a: call("POST", "/settings", {"camera_enabled":
+                                                             not call("GET", "/status")["settings"]["camera_enabled"]}))
     s = sub.add_parser("source", help="list sources, or switch: phone | webcam | <name> | /dev/…")
     s.add_argument("which", nargs="?")
     s.set_defaults(func=cmd_source)

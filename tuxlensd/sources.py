@@ -112,8 +112,11 @@ class LocalCamera(threading.Thread):
             try:
                 container = self._open()
             except Exception as exc:
-                self.error = f"{self.camera_id}: {exc}"
-                log.error("local camera: %s (retrying)", self.error)
+                busy = "busy" in str(exc).lower() or getattr(exc, "errno", None) == 16
+                # Another app (e.g. Meet using the webcam directly) has it: say so, retry quietly.
+                self.error = "busy" if busy else f"{self.camera_id}: {exc}"
+                if not busy:
+                    log.error("local camera: %s (retrying)", self.error)
                 self.stop_event.wait(2)
                 continue
             self.error = None
@@ -200,3 +203,29 @@ def set_control(device: str, name: str, value: int) -> bool:
                               capture_output=True, timeout=3).returncode == 0
     except (OSError, subprocess.TimeoutExpired, ValueError):
         return False
+
+
+# ------------------------------------------------------------------------------- who is watching
+def count_consumers(device: str) -> int:
+    """Processes (other than us) holding the virtual camera open, e.g. Chrome during a call.
+
+    Used to open the real camera only while some app is actually capturing, so the webcam LED
+    behaves like a normal webcam's.
+    """
+    target = os.path.realpath(device)
+    me = os.getpid()
+    pids = set()
+    for proc in Path("/proc").iterdir():
+        if not proc.name.isdigit() or int(proc.name) == me:
+            continue
+        try:
+            for fd in (proc / "fd").iterdir():
+                try:
+                    if os.readlink(fd) == target:
+                        pids.add(proc.name)
+                        break
+                except OSError:
+                    continue
+        except (PermissionError, FileNotFoundError, NotADirectoryError):
+            continue
+    return len(pids)

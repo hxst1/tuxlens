@@ -97,6 +97,9 @@ body.phone {
 body { --open: 0.08; }
 body[data-state="connecting"] { --open: 0.32; }
 body[data-state="standby"] { --open: 0.18; }
+body[data-state="ready"] { --open: 0.14; }
+body[data-state="cameraoff"] { --open: 0; }
+body[data-state="cameraoff"] .bezel { stroke: var(--muted); }
 body[data-state="connected"] { --open: 0.58; }
 body[data-state="live"] { --open: 0.9; }
 body[data-state="live"] .live-ring { opacity: 1; }

@@ -37,6 +37,10 @@ Chrome has the same web APIs but is untested.
 - **Webcams too.** Pick any USB or built-in camera instead of the phone and keep every effect.
   The camera's own controls (exposure, focus, white balance, optical zoom…) appear in the panel
   when it has them.
+- **Privacy first.** The real camera only opens while an app is using TuxLens (or the panel is
+  open), so the webcam light behaves like a normal webcam's and the webcam stays free for apps that
+  use it directly. A camera switch in the panel, `tuxlens off`, or a right click on the bar icon
+  turns it off completely; apps then see a "camera off" picture.
 - **Desktop integration.** GTK4 control panel with a live preview, a waybar module, a CLI, and a
   "camera paused" picture so Meet never loses the camera when the phone goes away.
 - **Themes.** Every surface (panel, phone page, bar icon, paused picture) is drawn from one small
@@ -135,6 +139,7 @@ tuxlens source webcam          # or: tuxlens source phone, tuxlens source (list)
 tuxlens effect blur            # none | blur | image ~/Pictures/office.jpg
 tuxlens set framing=true fps=60 capture=720p mic=true
 tuxlens theme catppuccin-mocha
+tuxlens off                    # privacy switch (tuxlens on / tuxlens toggle)
 tuxlens approve                # accept a pending pairing request
 tuxlens reload-phone           # reload the phone page after an update
 ```
@@ -150,13 +155,14 @@ tuxlens reload-phone           # reload the phone page after an update
     "interval": 60,
     "signal": 13,
     "tooltip": true,
-    "on-click": "~/.local/bin/tuxlens panel"
+    "on-click": "~/.local/bin/tuxlens panel",
+    "on-click-right": "~/.local/bin/tuxlens toggle"
 }
 ```
 
 Then `tuxlens set waybar_signal=13` so the daemon refreshes the icon the moment its state
 changes. For a text bar, `tuxlens waybar` prints JSON with a Nerd Font glyph and a `class`
-(`idle`, `waiting`, `live`, `pairing`, `error`, `off`).
+(`idle`, `waiting`, `live`, `pairing`, `error`, `disabled`, `off`).
 
 ## Themes
 

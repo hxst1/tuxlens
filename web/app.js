@@ -7,6 +7,8 @@ const T = {
   es: { connecting: 'Conectando con el PC…', connected: 'Abriendo la cámara…', live: 'En directo', offline: 'Sin conexión con el PC',
         offlineHelp: 'Comprueba que el PC está encendido y en la misma Wi-Fi.',
         standby: 'En pausa', standbyHelp: 'El PC está usando otra cámara.',
+        cameraoff: 'Cámara apagada', cameraoffHelp: 'Se ha apagado desde el PC.',
+        ready: 'Lista', readyHelp: 'Se encenderá sola cuando una app use la cámara.',
         show: 'Ver imagen', hide: 'Ocultar imagen', fps: 'fps',
         start: 'Empezar', denied: 'Safari no tiene permiso para la cámara', unpaired: 'Este móvil no está emparejado',
         pair: 'Emparejar con el PC', approve: 'Acepta la solicitud en tu PC…', rejected: 'El PC rechazó la solicitud',
@@ -17,6 +19,8 @@ const T = {
   en: { connecting: 'Connecting to the PC…', connected: 'Opening the camera…', live: 'Live', offline: 'No connection to the PC',
         offlineHelp: 'Check that the PC is on and on the same Wi-Fi.',
         standby: 'Paused', standbyHelp: 'The PC is using another camera.',
+        cameraoff: 'Camera off', cameraoffHelp: 'It was turned off from the PC.',
+        ready: 'Ready', readyHelp: 'It turns on by itself when an app uses the camera.',
         show: 'Show picture', hide: 'Hide picture', fps: 'fps',
         start: 'Start', denied: 'Safari has no camera permission', unpaired: 'This phone is not paired',
         pair: 'Pair with the PC', approve: 'Accept the request on your PC…', rejected: 'The PC rejected the request',
@@ -61,7 +65,8 @@ let cameraInfo = null;
 function setStatus(key, detail) {
   document.body.dataset.state = key;
   $('status-text').textContent = t(key);
-  $('detail').textContent = detail ?? ({ offline: t('offlineHelp'), standby: t('standbyHelp') }[key] || '');
+  $('detail').textContent = detail ?? ({ offline: t('offlineHelp'), standby: t('standbyHelp'),
+                                         cameraoff: t('cameraoffHelp'), ready: t('readyHelp') }[key] || '');
   $('status').textContent = `${t(key)}. ${$('detail').textContent}`;
   if (key === 'live') armDim(); else undim();
 }
@@ -242,7 +247,7 @@ async function applyConfig(next) {
     // The PC is using another camera: free the phone camera (and battery), keep the mic going.
     if (track) { worker.postMessage({ type: 'stop' }); track.stop(); track = null; stream = null; }
     $('preview-video').srcObject = null;
-    setStatus('standby');
+    setStatus({ off: 'cameraoff', idle: 'ready' }[next.reason] || 'standby');
     $('camera').textContent = '';
     if (next.mic && !micStream) startMic();
     else if (!next.mic && micStream) stopMic();

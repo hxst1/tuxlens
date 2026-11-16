@@ -71,6 +71,9 @@ class Daemon:
         self.pairing = Pairing(self.language)
         self.mic = PhoneMic()
         self.local: local_sources.LocalCamera | None = None
+        self.camera_active = False          # is the real camera (phone or local) running now?
+        self.consumers = 0                  # apps holding the virtual camera open
+        self.preview_until = 0.0            # the panel preview counts as a viewer
         self._cameras_cache: tuple[float, list] = (0.0, [])
         self.audio_ws: web.WebSocketResponse | None = None
 
@@ -104,8 +107,39 @@ class Daemon:
     def phone_config(self) -> dict:
         s = self.settings
         # active=False: another source is in use, the phone turns its camera off (mic may stay on).
-        return {"type": "config", "active": s.source == local_sources.PHONE,
+        active = s.source == local_sources.PHONE and self.camera_active
+        if active:
+            reason = None
+        elif not s.camera_enabled:
+            reason = "off"
+        elif s.source != local_sources.PHONE:
+            reason = "other-source"
+        else:
+            reason = "idle"                  # on demand: waiting for an app to use the camera
+        return {"type": "config", "active": active, "reason": reason,
                 **{k: getattr(s, k) for k in PHONE_KEYS}}
+
+    def wants_camera(self) -> bool:
+        import time as _time
+        s = self.settings
+        if not s.camera_enabled:
+            return False
+        return not s.on_demand or self.consumers > 0 or _time.monotonic() < self.preview_until
+
+    async def update_demand(self) -> None:
+        """Open or release the real camera according to the privacy switch and who is watching."""
+        active = self.wants_camera()
+        off = not self.settings.camera_enabled
+        if off != self.output.camera_off:
+            self.output.camera_off = off
+            self.output.refresh_placeholder()
+        if active == self.camera_active:
+            return
+        self.camera_active = active
+        log.info("camera %s (enabled=%s, viewers=%d)", "on" if active else "released",
+                 self.settings.camera_enabled, self.consumers)
+        self.apply_source()
+        await self.send_control(self.phone_config())
 
     # -- sources ---------------------------------------------------------------------------------
     def cameras(self) -> list[dict]:
@@ -130,6 +164,8 @@ class Daemon:
     def apply_source(self) -> None:
         """Start/stop the local camera reader according to settings.source."""
         wanted = None if self.settings.source == local_sources.PHONE else self.settings.source
+        if not self.camera_active:
+            wanted = None                      # released: privacy switch off, or nobody watching
         if self.local is not None and (wanted is None or self.local.camera_id != wanted):
             self.local.stop()
             self.local = None
@@ -179,6 +215,8 @@ class Daemon:
                 self.local = None
             self.apply_source()
             await self.send_control(self.phone_config())
+        if "camera_enabled" in changed or "on_demand" in changed:
+            await self.update_demand()
         if "mic" in changed:
             if self.settings.mic:
                 await asyncio.to_thread(self.mic.start, self.language())
@@ -205,6 +243,8 @@ class Daemon:
             "themes": themes.available(),
             "pair_requests": self.pairing.pending(),
             "sources": self.source_list(),
+            "camera": {"enabled": self.settings.camera_enabled, "active": self.camera_active,
+                       "on_demand": self.settings.on_demand, "viewers": self.consumers},
             "local": {"id": self.local.camera_id, "mode": self.local.mode, "error": self.local.error}
                      if self.local is not None else None,
             "mic": {**self.mic.stats(), "streaming": self.audio_ws is not None and not self.audio_ws.closed},
@@ -344,8 +384,8 @@ class Daemon:
         if version != 1:
             return
         key = bool(flags & FLAG_KEY)
-        if self.settings.source != local_sources.PHONE:
-            return                         # another camera is the source; the phone should be paused
+        if self.settings.source != local_sources.PHONE or not self.camera_active:
+            return                         # another source, or camera released: phone should be paused
         self.stats.count("frames_in")
         if self.last_seq is not None and seq != self.last_seq + 1 and not key:
             self.waiting_key = True
@@ -444,6 +484,10 @@ class Daemon:
     async def api_preview(self, request: web.Request) -> web.Response:
         """Small RGB thumbnail of what the virtual camera is showing (raw bytes)."""
         import av  # local import: only the panel uses this
+        import time as _time
+        self.preview_until = _time.monotonic() + 3.0      # an open panel keeps the camera on
+        if not self.camera_active and self.wants_camera():
+            await self.update_demand()
         width = max(64, min(960, int(request.query.get("w", "480")))) & ~1
         with self.output.preview_lock:
             frame = self.output.preview
@@ -542,6 +586,17 @@ class Daemon:
         return app
 
 
+async def watch_viewers(daemon: Daemon) -> None:
+    """Once a second: who holds the virtual camera open? Drives the on-demand camera."""
+    while True:
+        try:
+            daemon.consumers = await asyncio.to_thread(local_sources.count_consumers, daemon.settings.device)
+            await daemon.update_demand()
+        except Exception:
+            log.exception("viewer check failed")
+        await asyncio.sleep(1.0)
+
+
 async def watch_state(daemon: Daemon) -> None:
     """Nudge the status bar when the visible state changes, so its module needs no polling."""
     last = None
@@ -550,6 +605,7 @@ async def watch_state(daemon: Daemon) -> None:
         connected = daemon.control_ws is not None and not daemon.control_ws.closed
         state = "error" if daemon.output.error else daemon.output.state
         current = ("live" if state == "holding" else state, connected, daemon.settings.theme,
+                   daemon.settings.camera_enabled, daemon.camera_active,
                    daemon.settings.camera, daemon.settings.language, len(daemon.pairing.pending()))
         if current != last and daemon.settings.waybar_signal > 0:
             proc = await asyncio.create_subprocess_exec(
@@ -563,6 +619,7 @@ async def serve() -> None:
     daemon = Daemon()
     daemon.output.start()
     asyncio.create_task(watch_state(daemon))
+    asyncio.create_task(watch_viewers(daemon))
     if daemon.settings.mic:
         await asyncio.to_thread(daemon.mic.start, daemon.language())
     daemon.apply_source()
