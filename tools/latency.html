@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>TuxLens latency</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #fff; font-family: "JetBrainsMono Nerd Font", monospace; }
+  body { display: grid; grid-template-columns: 1fr 1fr; }
+  #clock { display: grid; place-items: center; font-size: 11vw; font-weight: 700; letter-spacing: -0.04em; background: #000; }
+  #right { position: relative; background: #111; }
+  video { width: 100%; height: 100%; object-fit: contain; }
+  #info { position: absolute; left: 12px; bottom: 10px; font-size: 14px; color: #aaa; }
+  select { position: absolute; left: 12px; top: 10px; font-size: 14px; }
+</style>
+</head>
+<body>
+  <!-- Point the phone at the left half. Screenshot the whole screen (grim): the left number is the
+       real time, the number inside the right half is what the virtual camera shows. The difference
+       is the glass-to-glass latency (resolution: one monitor refresh). -->
+  <div id="clock">0000</div>
+  <div id="right">
+    <video id="v" autoplay muted playsinline></video>
+    <select id="cams"></select>
+    <div id="info"></div>
+  </div>
+<script>
+  const clock = document.getElementById('clock');
+  const tick = () => { clock.textContent = String(Math.floor(performance.now()) % 10000).padStart(4, '0'); requestAnimationFrame(tick); };
+  tick();
+
+  const sel = document.getElementById('cams');
+  async function open(deviceId) {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: deviceId ? { deviceId: { exact: deviceId } } : true });
+    const v = document.getElementById('v');
+    v.srcObject = stream;
+    const s = stream.getVideoTracks()[0].getSettings();
+    document.getElementById('info').textContent = `${stream.getVideoTracks()[0].label} · ${s.width}×${s.height} · ${s.frameRate} fps`;
+  }
+  (async () => {
+    await (await navigator.mediaDevices.getUserMedia({ video: true })).getTracks().forEach((t) => t.stop());
+    const cams = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+    for (const c of cams) sel.add(new Option(c.label, c.deviceId));
+    const tux = cams.find((c) => /tuxlens/i.test(c.label));
+    if (tux) sel.value = tux.deviceId;
+    sel.onchange = () => open(sel.value);
+    open(sel.value);
+  })();
+</script>
+</body>
+</html>

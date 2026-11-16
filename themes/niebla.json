@@ -1,0 +1,30 @@
+{
+  "name": "Niebla",
+  "description": "Monochrome glass, a single muted red for warnings. The default.",
+  "dark": true,
+  "colors": {
+    "background": "#141516",
+    "surface": "#1a1b1d",
+    "surface_alt": "#26282a",
+    "text": "#e4e6e7",
+    "text_secondary": "#c8ccd0",
+    "muted": "#8a8f93",
+    "accent": "#c8ccd0",
+    "on_accent": "#141516",
+    "danger": "#b8656a",
+    "success": "#a9b9a5"
+  },
+  "glass": {
+    "rgb": "20, 21, 22",
+    "alpha": 0.55,
+    "blur": 20,
+    "border": "rgba(255, 255, 255, 0.09)"
+  },
+  "radius": 18,
+  "font": "Inter",
+  "mono_font": "JetBrainsMono Nerd Font",
+  "bar": {
+    "icon": "#f4f5f6",
+    "active": "#5ce6a0"
+  }
+}

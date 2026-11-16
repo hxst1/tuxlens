@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>TuxLens · Setup</title>
+  <link rel="icon" href="icon.svg">
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="card">
+    <header>
+      <img src="icon.svg" alt="" class="logo">
+      <div>
+        <h1>TuxLens</h1>
+        <p class="muted" data-t="subtitle">Pair this phone with your PC</p>
+      </div>
+    </header>
+
+    <ol class="steps">
+      <li><span data-t="s1">Download the certificate of your PC and tap <b>Allow</b>.</span></li>
+      <li><span data-t="s2">Open <b>Settings → Profile Downloaded → Install</b>.</span></li>
+      <li><span data-t="s3">Go to <b>Settings → General → About → Certificate Trust Settings</b> and turn on <b>TuxLens local CA</b>.</span></li>
+      <li><span data-t="s4">Open the camera page and allow camera access.</span></li>
+    </ol>
+
+    <a class="button secondary" href="ca.crt" data-t="download">Download certificate</a>
+    <a class="button" id="open" href="#" data-t="open">Open camera</a>
+    <p class="muted" data-t="note">Only needed once. The certificate only lets this phone trust your own PC.</p>
+  </main>
+  <script>
+    const es = (navigator.language || '').startsWith('es');
+    if (es) {
+      const tr = {
+        subtitle: 'Empareja este móvil con tu PC',
+        s1: 'Descarga el certificado de tu PC y pulsa <b>Permitir</b>.',
+        s2: 'Abre <b>Ajustes → Perfil descargado → Instalar</b>.',
+        s3: 'Ve a <b>Ajustes → General → Información → Ajustes de confianza de certificados</b> y activa <b>TuxLens local CA</b>.',
+        s4: 'Abre la página de la cámara y permite el acceso a la cámara.',
+        download: 'Descargar certificado', open: 'Abrir cámara',
+        note: 'Solo hace falta una vez. El certificado solo sirve para que este móvil confíe en tu propio PC.',
+      };
+      document.documentElement.lang = 'es';
+      document.querySelectorAll('[data-t]').forEach((el) => { el.innerHTML = tr[el.dataset.t] || el.innerHTML; });
+    }
+    // The pairing token travels in the URL fragment, which never reaches the server over plain HTTP.
+    const token = new URLSearchParams(location.hash.slice(1)).get('t') || '';
+    const httpsPort = Number(location.port) - 1;
+    document.getElementById('open').href = `https://${location.hostname}:${httpsPort}/#t=${encodeURIComponent(token)}`;
+  </script>
+</body>
+</html>

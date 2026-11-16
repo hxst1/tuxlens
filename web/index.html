@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="TuxLens">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#141516">
+  <title>TuxLens</title>
+  <link rel="icon" href="icon.svg">
+  <link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="phone" data-state="connecting">
+  <header class="top">
+    <span class="wordmark">TuxLens</span>
+    <span id="host" class="host"></span>
+  </header>
+
+  <main class="stage">
+    <!-- The aperture: closed when idle, opening while connecting, open when live.
+         The camera preview, when enabled, shows through the opening. -->
+    <figure class="lens" id="lens" aria-hidden="true">
+      <div id="preview" class="preview"><video id="preview-video" muted playsinline autoplay></video></div>
+      <svg class="iris" viewBox="-50 -50 100 100">
+        <defs>
+          <clipPath id="lens-clip"><circle r="44"/></clipPath>
+        </defs>
+        <g clip-path="url(#lens-clip)">
+          <rect class="blade" style="--a:0deg"   x="-100" y="0" width="200" height="100"/>
+          <rect class="blade" style="--a:60deg"  x="-100" y="0" width="200" height="100"/>
+          <rect class="blade" style="--a:120deg" x="-100" y="0" width="200" height="100"/>
+          <rect class="blade" style="--a:180deg" x="-100" y="0" width="200" height="100"/>
+          <rect class="blade" style="--a:240deg" x="-100" y="0" width="200" height="100"/>
+          <rect class="blade" style="--a:300deg" x="-100" y="0" width="200" height="100"/>
+        </g>
+        <circle class="bezel" r="44.5"/>
+        <circle class="live-ring" r="48.5"/>
+      </svg>
+    </figure>
+
+    <section class="readout">
+      <h1 id="status-text">…</h1>
+      <p id="camera" class="line"></p>
+      <p id="detail" class="line muted"></p>
+
+      <button id="start" class="primary" hidden>Start</button>
+      <button id="pair" class="primary" hidden>Pair with the PC</button>
+      <button id="orient-hint" class="quiet" hidden>Auto-rotate</button>
+      <button id="mic-hint" class="primary" hidden>Tap to enable the microphone</button>
+      <p id="wake-hint" class="line muted" hidden></p>
+      <p id="stats" class="stats" hidden></p>
+    </section>
+  </main>
+
+  <nav class="actions">
+    <button id="toggle-black" class="quiet">Black screen</button>
+    <button id="toggle-preview" class="quiet">Show picture</button>
+  </nav>
+
+  <!-- kept for app.js compatibility: status carries the state for assistive tech -->
+  <div id="status" class="sr-only" role="status" aria-live="polite"></div>
+  <div id="black" class="black" hidden><p id="black-hint"></p></div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,213 @@
+/* Layout only: every color, radius and font comes from theme.css (generated from the theme). */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: var(--background);
+  color: var(--text);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+button {
+  font: inherit;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+button:focus-visible { outline: 2px solid var(--text-secondary); outline-offset: 3px; }
+[hidden] { display: none !important; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.muted { color: var(--muted); }
+
+/* ===================================================================== phone page */
+body.phone {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-height: 100dvh;
+  /* iOS blurs whatever sits under the status bar: start below the safe area, plus breathing room. */
+  padding: calc(env(safe-area-inset-top) + 32px) max(20px, env(safe-area-inset-right))
+           max(16px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+}
+
+.top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 15px;
+}
+.wordmark { font-weight: 650; letter-spacing: -0.01em; }
+.host { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+
+.stage {
+  display: grid;
+  grid-template-rows: auto auto;
+  align-content: center;
+  justify-items: center;
+  gap: clamp(20px, 5vh, 40px);
+}
+
+/* ---------- the aperture */
+.lens {
+  position: relative;
+  width: min(68vw, 46vh, 340px);
+  aspect-ratio: 1;
+  cursor: pointer;
+}
+.iris { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+
+.blade {
+  /* Each blade is a half-plane pushed out from the center by --d and twisted a little as it
+     closes, like a real diaphragm. --open (0 closed … 1 open) is set on <body> per state. */
+  --d: calc(4px + var(--open) * 37px);
+  --twist: calc((1 - var(--open)) * 28deg);
+  fill: var(--surface-alt);
+  stroke: color-mix(in srgb, var(--text) 18%, transparent);
+  stroke-width: 0.5;
+  transform-box: view-box;
+  transform-origin: 0 0;
+  transform: rotate(calc(var(--a) + var(--twist))) translateY(var(--d));
+  transition: transform 700ms cubic-bezier(.3, .7, .2, 1);
+}
+.bezel { fill: none; stroke: var(--text-secondary); stroke-width: 1.4; }
+.live-ring {
+  fill: none;
+  stroke: var(--success);
+  stroke-width: 1.2;
+  opacity: 0;
+  transition: opacity 500ms ease;
+}
+
+.preview {
+  position: absolute;
+  inset: 6%;
+  border-radius: 50%;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse 22% 14% at 34% 28%, color-mix(in srgb, var(--text) 9%, transparent), transparent 70%),
+    radial-gradient(circle, var(--surface) 0%, #000 100%);
+}
+.preview video { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity 300ms; }
+.preview.on video { opacity: 1; }
+
+body { --open: 0.08; }
+body[data-state="connecting"] { --open: 0.32; }
+body[data-state="standby"] { --open: 0.18; }
+body[data-state="connected"] { --open: 0.58; }
+body[data-state="live"] { --open: 0.9; }
+body[data-state="live"] .live-ring { opacity: 1; }
+body[data-state="offline"] .bezel, body[data-state="unpaired"] .bezel { stroke: var(--muted); }
+
+/* ---------- readout */
+.readout {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  text-align: center;
+  max-width: 34ch;
+}
+.readout h1 {
+  font-size: clamp(26px, 7.5vw, 34px);
+  font-weight: 620;
+  letter-spacing: -0.022em;
+  line-height: 1.1;
+}
+.line { font-size: 16px; line-height: 1.4; color: var(--text-secondary); }
+.line.muted { color: var(--muted); font-size: 15px; }
+.line:empty { display: none; }
+.stats { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; line-height: 1.5; }
+
+.readout button { margin-top: 14px; }
+.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 620;
+  font-size: 16px;
+  padding: 13px 22px;
+  border-radius: 999px;
+}
+.primary:disabled { opacity: 0.5; }
+.quiet {
+  color: var(--text-secondary);
+  font-size: 15px;
+  padding: 10px 4px;
+}
+.quiet:active, .primary:active { opacity: 0.6; }
+
+.actions {
+  display: flex;
+  justify-content: space-between;
+  border-top: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+  padding-top: 6px;
+}
+
+/* ---------- landscape (phone resting sideways): lens left, words right */
+@media (orientation: landscape) and (max-height: 560px) {
+  .stage { grid-template-rows: none; grid-template-columns: auto auto; justify-content: center; align-items: center; }
+  .lens { width: min(36vw, 64vh, 300px); }
+  .readout { justify-items: start; text-align: left; }
+}
+
+/* ---------- dim after a while when live, black screen on demand */
+body.dimmed > :not(.black) { opacity: 0.08; transition: opacity 1.2s ease; }
+body.dimmed .live-ring { opacity: 1; }
+.black {
+  position: fixed; inset: 0; background: #000; z-index: 10;
+  display: grid; place-items: end center; padding-bottom: max(24px, env(safe-area-inset-bottom));
+}
+.black p { color: #1c1c1c; font-size: 13px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .blade, .live-ring, .preview video, body.dimmed > * { transition: none; }
+}
+
+/* ===================================================================== setup page */
+body:not(.phone) {
+  display: grid;
+  place-items: center;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+}
+.card {
+  width: min(420px, 100%);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  padding: 22px 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.card header { display: flex; align-items: center; gap: 14px; }
+.logo { width: 44px; height: 44px; }
+.card h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+.card .muted { font-size: 13px; margin-top: 2px; }
+.steps { list-style: none; display: flex; flex-direction: column; gap: 12px; counter-reset: step; }
+.steps li {
+  counter-increment: step;
+  display: grid; grid-template-columns: 28px 1fr; gap: 10px; align-items: start;
+  font-size: 14.5px; line-height: 1.45; color: var(--text-secondary);
+}
+.steps li::before {
+  content: counter(step);
+  width: 26px; height: 26px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: color-mix(in srgb, var(--surface-alt) 80%, transparent);
+  color: var(--text); font-weight: 600; font-size: 13px;
+}
+.steps b { color: var(--text); font-weight: 600; }
+a.button {
+  display: block; text-align: center; text-decoration: none;
+  font-weight: 600; font-size: 15px;
+  padding: 12px 14px; border-radius: calc(var(--radius) * 0.6);
+  background: var(--accent); color: var(--on-accent);
+}
+a.button.secondary {
+  background: color-mix(in srgb, var(--surface-alt) 55%, transparent);
+  color: var(--text-secondary); border: 1px solid var(--glass-border);
+}

@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.log
+*.tmp
+# Never commit runtime state: pairing token, certificates, personal settings
+settings.json
+token
+certs/
+*.key
+*.crt
+*.pem
+panel.json

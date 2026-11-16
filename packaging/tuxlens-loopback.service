@@ -1,0 +1,16 @@
+[Unit]
+Description=TuxLens virtual camera (v4l2loopback device)
+Documentation=https://github.com/hxst1/tuxlens
+After=systemd-modules-load.service
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Adds a dedicated device without touching other loopback users (OBS, Iriun…).
+ExecStartPre=/usr/bin/modprobe v4l2loopback
+ExecStart=/bin/sh -c '[ -e /dev/video10 ] || exec v4l2loopback-ctl add -n TuxLens -x 1 -b 2 -w 1920 -h 1080 /dev/video10'
+ExecStop=/bin/sh -c '[ -e /dev/video10 ] && v4l2loopback-ctl delete /dev/video10 || true'
+
+[Install]
+WantedBy=multi-user.target

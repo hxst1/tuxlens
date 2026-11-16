@@ -1,0 +1,19 @@
+[Unit]
+Description=TuxLens daemon (phone as a webcam)
+Documentation=https://github.com/hxst1/tuxlens
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@APPDIR@
+ExecStart=/usr/bin/python3 -m tuxlensd
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=2
+# Shut down quickly so a restart can rebind the ports right away.
+KillSignal=SIGINT
+TimeoutStopSec=5
+
+[Install]
+WantedBy=default.target

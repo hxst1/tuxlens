@@ -1,0 +1,21 @@
+{
+  "name": "Nord",
+  "description": "Arctic, north-bluish palette (palette: nordtheme.com, MIT).",
+  "dark": true,
+  "colors": {
+    "background": "#2e3440",
+    "surface": "#3b4252",
+    "surface_alt": "#434c5e",
+    "text": "#eceff4",
+    "text_secondary": "#e5e9f0",
+    "muted": "#9aa3b5",
+    "accent": "#88c0d0",
+    "on_accent": "#2e3440",
+    "danger": "#bf616a",
+    "success": "#a3be8c"
+  },
+  "glass": { "rgb": "46, 52, 64", "alpha": 0.65, "blur": 16, "border": "rgba(236, 239, 244, 0.1)" },
+  "radius": 10,
+  "font": "Inter",
+  "mono_font": "JetBrainsMono Nerd Font"
+}

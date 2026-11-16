@@ -1,0 +1,21 @@
+{
+  "name": "Paper",
+  "description": "Light theme with frosted white glass.",
+  "dark": false,
+  "colors": {
+    "background": "#f4f4f2",
+    "surface": "#ffffff",
+    "surface_alt": "#e9e9e6",
+    "text": "#1d1e20",
+    "text_secondary": "#3c3f43",
+    "muted": "#74787d",
+    "accent": "#2f6fdb",
+    "on_accent": "#ffffff",
+    "danger": "#c4453f",
+    "success": "#3f8f5a"
+  },
+  "glass": { "rgb": "250, 250, 248", "alpha": 0.7, "blur": 20, "border": "rgba(0, 0, 0, 0.08)" },
+  "radius": 16,
+  "font": "Inter",
+  "mono_font": "JetBrainsMono Nerd Font"
+}

@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+"""TuxLens command line: talks to the daemon over its local Unix socket."""
+from __future__ import annotations
+
+import argparse
+import http.client
+import json
+import os
+import shutil
+import socket
+import subprocess
+import sys
+from pathlib import Path
+
+RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/tuxlens-{os.getuid()}") / "tuxlens"
+SOCKET = RUNTIME / "control.sock"
+
+
+class UnixConnection(http.client.HTTPConnection):
+    def __init__(self, path: Path, timeout: float = 3.0):
+        super().__init__("localhost", timeout=timeout)
+        self.path = str(path)
+
+    def connect(self) -> None:
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(self.path)
+
+
+def call(method: str, path: str, body: dict | None = None) -> dict:
+    conn = UnixConnection(SOCKET)
+    payload = json.dumps(body).encode() if body is not None else None
+    conn.request(method, path, body=payload, headers={"Content-Type": "application/json"} if payload else {})
+    resp = conn.getresponse()
+    data = resp.read()
+    if resp.status >= 400:
+        raise SystemExit(f"tuxlens: daemon answered {resp.status}")
+    return json.loads(data) if data else {}
+
+
+def daemon_status() -> dict | None:
+    try:
+        return call("GET", "/status")
+    except (OSError, ConnectionError):
+        return None
+
+
+def show_qr(text: str) -> None:
+    if shutil.which("qrencode"):
+        subprocess.run(["qrencode", "-t", "ANSIUTF8", "-m", "2", text])
+    else:
+        print("(install 'qrencode' to see a QR code here)")
+
+
+def cmd_status(args) -> None:
+    st = daemon_status()
+    if st is None:
+        raise SystemExit("tuxlens: daemon not running (systemctl --user start tuxlens)")
+    if args.json:
+        print(json.dumps(st, indent=2))
+        return
+    phone = st["phone"]
+    s = st["settings"]
+    print(f"state      {st['state']}" + (f"  ({st['error']})" if st.get("error") else ""))
+    print(f"phone      {'connected' if phone.get('connected') else 'not connected'}"
+          + (f", streaming {phone.get('width')}x{phone.get('height')}" if phone.get("streaming") else ""))
+    print(f"camera     {s['camera']}  zoom {s['zoom']}  torch {'on' if s['torch'] else 'off'}")
+    print(f"output     {s['device']}  {s['width']}x{s['height']}@{s['fps']}")
+    print(f"effect     {s['effect']}  filter {s['filter']}  theme {s['theme']}")
+    stats = st["stats"]
+    stages = stats["stages_ms"]
+    print(f"fps out    {stats['fps_out']}")
+    for name in ("network", "decode", "process", "total"):
+        v = stages[name]
+        print(f"  {name:<8} p50 {v['p50']:>6} ms   p95 {v['p95']:>6} ms")
+    ph = stats.get("phone") or {}
+    if ph:
+        print(f"  phone    encode {ph.get('encodeMs')} ms, {ph.get('kbps')} kbps, dropped {ph.get('droppedBusy')}")
+    clock = st["clock"]
+    if clock.get("rtt_ms") is not None:
+        print(f"  clock    rtt {clock['rtt_ms']:.1f} ms")
+    print(f"  counters {stats['counters']}")
+
+
+def cmd_set(args) -> None:
+    changes = {}
+    for item in args.pairs:
+        if "=" not in item:
+            raise SystemExit(f"tuxlens: expected key=value, got {item!r}")
+        k, v = item.split("=", 1)
+        changes[k] = v
+    print(json.dumps(call("POST", "/settings", changes)["changed"]))
+
+
+def cmd_camera(args) -> None:
+    call("POST", "/settings", {"camera": args.which})
+
+
+def cmd_effect(args) -> None:
+    changes = {"effect": args.kind}
+    if args.kind == "image":
+        if not args.path:
+            raise SystemExit("tuxlens: effect image needs a path")
+        changes["background_image"] = str(Path(args.path).expanduser().resolve())
+    call("POST", "/settings", changes)
+
+
+def cmd_source(args) -> None:
+    st = call("GET", "/status")
+    sources = st.get("sources") or []
+    if not args.which:
+        current = st["settings"].get("source", "phone")
+        for src in sources:
+            mark = "*" if src["id"] == current else " "
+            extra = "" if src["kind"] != "phone" else ("  (connected)" if src.get("connected") else "  (not connected)")
+            print(f"{mark} {src['name']:<28} {src['id']}{extra}")
+        return
+    want = args.which
+    if want not in ("phone",) and not want.startswith("/dev/"):
+        matches = [x for x in sources if want.lower() in x["name"].lower() or (want == "webcam" and x["kind"] == "v4l2")]
+        if not matches:
+            raise SystemExit(f"tuxlens: no source matches {want!r}")
+        want = matches[0]["id"]
+    call("POST", "/settings", {"source": want})
+
+
+def cmd_approve(args) -> None:
+    pending = call("GET", "/status").get("pair_requests") or []
+    if not pending:
+        raise SystemExit("tuxlens: no pending pairing requests")
+    req = pending[-1]
+    call("POST", "/pair/decide", {"id": req["id"], "approve": not args.reject})
+    print(f"{'rejected' if args.reject else 'approved'}: {req['name']} ({req['address']})")
+
+
+def cmd_pair(args) -> None:
+    urls = call("POST" if args.reset else "GET", "/pair")
+    print("Scan with the phone camera (same Wi-Fi):\n")
+    show_qr(urls["setup"])
+    print(f"\n  {urls['setup']}")
+    if urls.get("setup_ip"):
+        print(f"  {urls['setup_ip']}   (if .local names don't resolve)")
+
+
+def cmd_waybar(args) -> None:
+    """One JSON line for a waybar custom module."""
+    st = daemon_status()
+    if st is None:
+        state, settings = "off", {}
+    else:
+        phone = st["phone"]
+        settings = st["settings"]
+        state = "live" if st["state"] in ("live", "holding") else ("waiting" if phone.get("connected") else "idle")
+        if st["state"] == "error":
+            state = "error"
+        if st.get("pair_requests"):
+            state = "pairing"
+    lang = settings.get("language", "auto")
+    if lang == "auto":
+        lang = (os.environ.get("LC_ALL") or os.environ.get("LC_MESSAGES") or os.environ.get("LANG") or "en")[:2]
+    texts = WAYBAR_TEXTS.get(lang, WAYBAR_TEXTS["en"])
+    if state == "live":
+        total = st["stats"]["stages_ms"]["total"]["p50"]
+        camera = st["phone"].get("label") or settings.get("camera")
+        if settings.get("source", "phone") != "phone":
+            camera = next((x["name"] for x in st.get("sources") or [] if x["id"] == settings["source"]), "camera")
+        tip = texts["live"].format(camera=camera, fps=round(st["stats"]["fps_out"]), ms=round(total))
+    elif state == "error":
+        tip = texts["error"].format(error=st.get("error"))
+    elif state == "pairing":
+        req = st["pair_requests"][-1]
+        tip = texts["pairing"].format(name=req["name"], address=req["address"])
+    else:
+        tip = texts[state]
+    if args.image:
+        print(waybar_icon(state, settings.get("theme")))
+        print(tip)
+    else:
+        print(json.dumps({"text": GLYPHS[state], "alt": state, "class": state, "tooltip": tip}))
+
+
+WAYBAR_TEXTS = {
+    "es": {"live": "TuxLens · {camera} · {fps} fps · {ms} ms", "waiting": "TuxLens · iPhone conectado, iniciando cámara",
+           "idle": "TuxLens · esperando al iPhone", "off": "TuxLens · servicio parado",
+           "pairing": "TuxLens · {name} ({address}) quiere conectarse: pulsa para aceptar",
+           "error": "TuxLens · {error}"},
+    "en": {"live": "TuxLens · {camera} · {fps} fps · {ms} ms", "waiting": "TuxLens · phone connected, starting camera",
+           "idle": "TuxLens · waiting for the phone", "off": "TuxLens · service stopped",
+           "pairing": "TuxLens · {name} ({address}) wants to connect: click to accept",
+           "error": "TuxLens · {error}"},
+}
+# Nerd Font glyphs (md-webcam / md-webcam_off) for bars that show text.
+GLYPHS = {"live": "\U000f05a0", "waiting": "\U000f05a0", "idle": "\U000f05a0", "error": "\U000f05a0",
+          "pairing": "\U000f05a0", "off": "\U000f1737"}
+
+
+def waybar_icon(state: str, theme_id: str | None) -> str:
+    """SVG icon for the state, colored from the theme; cached under ~/.cache/tuxlens/icons."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    try:
+        from tuxlensd import themes
+        theme = themes.load(theme_id)
+    except ImportError:
+        theme = {"id": "default", "colors": {"text": "#e4e6e7", "muted": "#8a8f93", "success": "#a9b9a5",
+                                              "accent": "#c8ccd0", "danger": "#b8656a"}}
+    c = theme["colors"]
+    bar = theme.get("bar") or {}
+    ink = bar.get("icon") or c["text"]
+    active = bar.get("active") or c["success"]
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "tuxlens" / "icons"
+    cache.mkdir(parents=True, exist_ok=True)
+    # Fluent-like line icon (1.6 stroke, rounded joins): outline when idle, filled when live.
+    body = "M5.25 6h8.5A2.25 2.25 0 0 1 16 8.25v7.5A2.25 2.25 0 0 1 13.75 18h-8.5A2.25 2.25 0 0 1 3 15.75v-7.5A2.25 2.25 0 0 1 5.25 6Z"
+    lens = "M16 10.1l3.85-2.25A.75.75 0 0 1 21 8.5v7a.75.75 0 0 1-1.15.65L16 13.9Z"
+    svg = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="200" height="200">']
+    if state == "live":
+        svg.append(f'<path fill="{ink}" d="{body}"/><path fill="{ink}" d="{lens}"/>')
+    else:
+        svg.append(f'<g fill="none" stroke="{ink}" stroke-width="1.6" stroke-linejoin="round">'
+                   f'<path d="{body}"/><path d="{lens}"/></g>')
+    if state == "off":
+        svg.append(f'<path stroke="{ink}" stroke-width="1.6" stroke-linecap="round" d="M3.5 3.5l17 17"/>')
+    dot = {"live": active, "waiting": ink, "error": c["danger"]}.get(state)
+    if state == "pairing":   # ring = "someone is asking": open the panel to accept
+        svg.append(f'<circle cx="19.4" cy="4.6" r="3.4" fill="none" stroke="{active}" stroke-width="1.6"/>'
+                   f'<circle cx="19.4" cy="4.6" r="1.3" fill="{active}"/>')
+    if dot:
+        # A gap ring in the bar's color would need to know the bar; a small dot off the corner reads fine.
+        svg.append(f'<circle cx="19.6" cy="4.4" r="2.9" fill="{dot}"/>')
+    svg.append("</svg>")
+    path = cache / f"{theme.get('id', 'default')}-{state}.svg"
+    content = "".join(svg)
+    if not path.exists() or path.read_text() != content:
+        path.write_text(content)
+    return str(path)
+
+
+def cmd_panel(args) -> None:
+    panel = Path(__file__).resolve().parent.parent / "panel" / "tuxlens-panel"
+    if not panel.exists():
+        panel = Path(shutil.which("tuxlens-panel") or "tuxlens-panel")
+    subprocess.Popen(["setsid", str(panel)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(prog="tuxlens", description="Control the TuxLens virtual camera")
+    sub = p.add_subparsers(dest="cmd")
+    s = sub.add_parser("status", help="show state and latency")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_status)
+    s = sub.add_parser("set", help="change settings: tuxlens set fps=60 bitrate=8000000")
+    s.add_argument("pairs", nargs="+")
+    s.set_defaults(func=cmd_set)
+    s = sub.add_parser("camera", help="switch the phone camera")
+    s.add_argument("which", choices=["front", "back", "wide", "tele"])
+    s.set_defaults(func=cmd_camera)
+    s = sub.add_parser("effect", help="background effect")
+    s.add_argument("kind", choices=["none", "blur", "image"])
+    s.add_argument("path", nargs="?")
+    s.set_defaults(func=cmd_effect)
+    s = sub.add_parser("theme", help="change theme")
+    s.add_argument("name")
+    s.set_defaults(func=lambda a: call("POST", "/settings", {"theme": a.name}))
+    s = sub.add_parser("pair", help="show the pairing QR code")
+    s.add_argument("--reset", action="store_true", help="new token: disconnects paired phones")
+    s.set_defaults(func=cmd_pair)
+    s = sub.add_parser("source", help="list sources, or switch: phone | webcam | <name> | /dev/…")
+    s.add_argument("which", nargs="?")
+    s.set_defaults(func=cmd_source)
+    s = sub.add_parser("approve", help="accept the pending pairing request (or --reject it)")
+    s.add_argument("--reject", action="store_true")
+    s.set_defaults(func=cmd_approve)
+    s = sub.add_parser("keyframe", help="ask the phone for a keyframe")
+    s.set_defaults(func=lambda a: call("POST", "/keyframe"))
+    s = sub.add_parser("reload-phone", help="reload the page on the phone (after an update)")
+    s.set_defaults(func=lambda a: call("POST", "/phone/reload"))
+    s = sub.add_parser("waybar", help="status for a waybar module (JSON, or icon path + tooltip with --image)")
+    s.add_argument("--image", action="store_true", help="for waybar's image module")
+    s.set_defaults(func=cmd_waybar)
+    s = sub.add_parser("panel", help="open (or close) the control panel")
+    s.set_defaults(func=cmd_panel)
+    args = p.parse_args()
+    if not args.cmd:
+        args = p.parse_args(["status"])
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,1056 @@
+#!/usr/bin/env python3
+"""TuxLens control panel: GTK4 + layer-shell glass card driven by the daemon's local API.
+
+Everything the phone does is controlled from here; the phone only grants permissions.
+Styling comes entirely from the active theme (themes/*.json) plus ~/.config/tuxlens/extra.css.
+"""
+from __future__ import annotations
+
+import ctypes.util
+import os
+import sys
+from pathlib import Path
+
+# gtk4-layer-shell must load before libwayland; from Python that means LD_PRELOAD + re-exec.
+def _layer_shell_lib() -> str | None:
+    for candidate in ("/usr/lib/libgtk4-layer-shell.so", "/usr/lib64/libgtk4-layer-shell.so",
+                      "/usr/lib/x86_64-linux-gnu/libgtk4-layer-shell.so.0"):
+        if os.path.exists(candidate):
+            return candidate
+    name = ctypes.util.find_library("gtk4-layer-shell")
+    return name
+
+
+_LIB = _layer_shell_lib()
+if _LIB and _LIB not in os.environ.get("LD_PRELOAD", "") and not os.environ.get("TUXLENS_NO_PRELOAD"):
+    os.environ["LD_PRELOAD"] = (_LIB + " " + os.environ.get("LD_PRELOAD", "")).strip()
+    os.execv(sys.executable, [sys.executable, os.path.abspath(sys.argv[0]), *sys.argv[1:]])
+
+import http.client  # noqa: E402
+import json  # noqa: E402
+import shutil  # noqa: E402
+import signal  # noqa: E402
+import socket  # noqa: E402
+import subprocess  # noqa: E402
+import threading  # noqa: E402
+
+import gi  # noqa: E402
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
+from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
+
+try:
+    gi.require_version("Gtk4LayerShell", "1.0")
+    from gi.repository import Gtk4LayerShell as LayerShell  # noqa: E402
+except (ValueError, ImportError):
+    LayerShell = None
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+from tuxlensd import themes  # noqa: E402
+from tuxlensd.config import CONTROL_SOCKET  # noqa: E402
+
+LANG = (os.environ.get("LC_ALL") or os.environ.get("LC_MESSAGES") or os.environ.get("LANG") or "en")[:2]
+STRINGS = {
+    "es": {
+        "live": "En directo", "holding": "Cambiando de cámara…", "idle": "Esperando al iPhone",
+        "connected": "iPhone conectado, iniciando cámara", "error": "Error", "off": "El servicio no está en marcha",
+        "camera": "Cámara", "wide": "0.5×", "back": "1×", "tele": "Tele", "front": "Frontal",
+        "zoom": "Zoom", "torch": "Linterna", "image": "Imagen", "mode": "Modo",
+        "fast": "Rápido · 60 fps", "sharp": "Nítido · 1080p", "rotation": "Giro",
+        "auto": "Automático", "mirror": "Espejo", "look": "Aspecto", "theme": "Tema",
+        "wants": "{name} ({address}) quiere conectarse", "accept": "Aceptar", "reject": "Rechazar",
+        "pair": "Emparejar iPhone", "pair_help": "Escanea con la cámara del iPhone (misma Wi-Fi)",
+        "reload": "Recargar iPhone", "close": "Cerrar (Esc)", "no_preview": "Sin imagen",
+        "start_hint": "systemctl --user start tuxlens", "latency": "iPhone→PC",
+        "mic": "Micrófono del iPhone", "mic_hint": "En Meet elige «TuxLens» como micrófono",
+        "mic_live": "Enviando audio", "effects": "Efectos",
+        "audio_settings": "Ajustes de audio", "audio": "Audio",
+        "source": "Fuente", "not_connected": "sin conectar", "cam_settings": "Ajustes de la cámara",
+        "digital": "Zoom digital",
+        "ctl": {"zoom_absolute": "Zoom óptico", "focus_automatic_continuous": "Enfoque automático",
+                "focus_absolute": "Enfoque", "auto_exposure": "Exposición", "exposure_time_absolute": "Tiempo de exposición",
+                "brightness": "Brillo", "contrast": "Contraste", "saturation": "Saturación", "sharpness": "Nitidez",
+                "white_balance_automatic": "Balance de blancos automático", "white_balance_temperature": "Temperatura de color",
+                "backlight_compensation": "Compensar contraluz", "power_line_frequency": "Antiparpadeo"},
+        "menu": {"Manual Mode": "Manual", "Aperture Priority Mode": "Automática", "Auto Mode": "Automática",
+                 "Shutter Priority Mode": "Prioridad obturador", "Disabled": "Desactivado"}, "gain": "Ganancia", "mute": "Silenciar",
+        "echo": "Cancelación de eco del iPhone", "noise": "Reducción de ruido", "agc": "Ganancia automática",
+        "echo_hint": "El eco de los altavoces del PC lo quita Meet; con cascos no hay eco",
+        "level": "Nivel", "bg_none": "Nada", "bg_blur": "Desenfoque", "bg_image": "Imagen",
+        "strength": "Intensidad", "choose": "Elegir…", "no_image": "Sin imagen elegida",
+        "framing": "Encuadre automático", "framing_hint": "Te sigue si te mueves", "filter": "Filtro",
+        "f_none": "Ninguno", "f_mono": "B/N", "f_warm": "Cálido", "f_cool": "Frío", "f_vivid": "Vivo",
+        "images": "Imágenes",
+    },
+    "en": {
+        "live": "Live", "holding": "Switching camera…", "idle": "Waiting for the phone",
+        "connected": "Phone connected, starting camera", "error": "Error", "off": "The service is not running",
+        "camera": "Camera", "wide": "0.5×", "back": "1×", "tele": "Tele", "front": "Front",
+        "zoom": "Zoom", "torch": "Torch", "image": "Picture", "mode": "Mode",
+        "fast": "Fast · 60 fps", "sharp": "Sharp · 1080p", "rotation": "Rotation",
+        "auto": "Automatic", "mirror": "Mirror", "look": "Look", "theme": "Theme",
+        "wants": "{name} ({address}) wants to connect", "accept": "Accept", "reject": "Reject",
+        "pair": "Pair a phone", "pair_help": "Scan with the phone camera (same Wi-Fi)",
+        "reload": "Reload phone", "close": "Close (Esc)", "no_preview": "No picture",
+        "start_hint": "systemctl --user start tuxlens", "latency": "phone→PC",
+        "mic": "Phone microphone", "mic_hint": "Pick «TuxLens» as the microphone in Meet",
+        "mic_live": "Sending audio", "effects": "Effects",
+        "audio_settings": "Audio settings", "audio": "Audio",
+        "source": "Source", "not_connected": "not connected", "cam_settings": "Camera settings",
+        "digital": "Digital zoom",
+        "ctl": {"zoom_absolute": "Optical zoom", "focus_automatic_continuous": "Autofocus",
+                "focus_absolute": "Focus", "auto_exposure": "Exposure", "exposure_time_absolute": "Exposure time",
+                "brightness": "Brightness", "contrast": "Contrast", "saturation": "Saturation", "sharpness": "Sharpness",
+                "white_balance_automatic": "Auto white balance", "white_balance_temperature": "Color temperature",
+                "backlight_compensation": "Backlight compensation", "power_line_frequency": "Anti-flicker"},
+        "menu": {"Manual Mode": "Manual", "Aperture Priority Mode": "Automatic", "Auto Mode": "Automatic"}, "gain": "Gain", "mute": "Mute",
+        "echo": "Phone echo cancellation", "noise": "Noise reduction", "agc": "Automatic gain",
+        "echo_hint": "Echo from the PC speakers is removed by Meet; headphones avoid it",
+        "level": "Level", "bg_none": "None", "bg_blur": "Blur", "bg_image": "Picture",
+        "strength": "Strength", "choose": "Choose…", "no_image": "No picture chosen",
+        "framing": "Auto-framing", "framing_hint": "Follows you when you move", "filter": "Filter",
+        "f_none": "None", "f_mono": "B/W", "f_warm": "Warm", "f_cool": "Cool", "f_vivid": "Vivid",
+        "images": "Images",
+    },
+}
+S = STRINGS.get(LANG, STRINGS["en"])
+
+
+def use_language(setting: str | None) -> None:
+    """settings.language: 'auto' follows the locale, otherwise a language code."""
+    global S
+    code = LANG if not setting or setting == "auto" else setting[:2]
+    S = STRINGS.get(code, STRINGS["en"])
+
+CAMERA_ORDER = ["wide", "back", "tele", "front"]
+
+
+# ------------------------------------------------------------------------------------- API
+class UnixHTTP(http.client.HTTPConnection):
+    def __init__(self, timeout: float = 2.0):
+        super().__init__("localhost", timeout=timeout)
+
+    def connect(self) -> None:
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(str(CONTROL_SOCKET))
+
+
+def api(method: str, path: str, body: dict | None = None, raw: bool = False):
+    conn = UnixHTTP()
+    try:
+        payload = json.dumps(body).encode() if body is not None else None
+        conn.request(method, path, body=payload, headers={"Content-Type": "application/json"} if payload else {})
+        resp = conn.getresponse()
+        data = resp.read()
+        if raw:
+            return resp.status, dict(resp.getheaders()), data
+        return json.loads(data) if data else {}
+    finally:
+        conn.close()
+
+
+def api_async(method: str, path: str, body: dict | None = None, done=None) -> None:
+    def work():
+        try:
+            result = api(method, path, body)
+        except OSError:
+            result = None
+        if done:
+            GLib.idle_add(done, result)
+    threading.Thread(target=work, daemon=True).start()
+
+
+# ------------------------------------------------------------------------------------- CSS
+def build_css(theme: dict) -> str:
+    c = theme["colors"]
+    g = theme["glass"]
+    r = theme["radius"]
+    blur = f"backdrop-filter: blur({g['blur']}px);" if g.get("blur") else ""
+    return f"""
+window.tl {{ background: transparent; color: {c['text']}; font-family: "{theme['font']}"; }}
+window.tl .card {{
+  background: rgba({g['rgb']}, {g['alpha']});
+  {blur}
+  border: 1px solid {g['border']};
+  border-radius: {r}px;
+  padding: 16px 16px 12px 16px;
+}}
+window.tl label {{ color: {c['text']}; }}
+window.tl .title {{ font-size: 19px; font-weight: 600; }}
+window.tl .subtitle {{ font-size: 12px; color: {c['text_secondary']}; }}
+window.tl .section {{ font-size: 11.5px; font-weight: 600; color: {c['muted']}; margin: 14px 0 6px 2px; }}
+window.tl .muted, window.tl .stats {{ font-size: 11.5px; color: {c['muted']}; }}
+window.tl .stats {{ font-family: "{theme['mono_font']}", monospace; }}
+window.tl .dot {{ min-width: 8px; min-height: 8px; border-radius: 99px; background: {c['muted']}; margin-right: 8px; }}
+window.tl .dot.live {{ background: {c['success']}; }}
+window.tl .dot.error {{ background: {c['danger']}; }}
+window.tl .dot.connected, window.tl .dot.holding {{ background: {c['accent']}; }}
+window.tl .preview {{
+  background: rgba(0, 0, 0, 0.35); border-radius: {max(4, r - 6)}px;
+  border: 1px solid {g['border']};
+}}
+window.tl .preview-empty {{ color: {c['muted']}; font-size: 12px; }}
+window.tl button {{
+  background: none; background-image: none; box-shadow: none; outline: none;
+  border: 1px solid transparent; color: {c['text_secondary']};
+  min-height: 0; min-width: 0; padding: 6px 10px; border-radius: {max(4, r // 2)}px;
+}}
+window.tl button:hover {{ background: alpha({c['text']}, 0.08); color: {c['text']}; }}
+window.tl button:disabled {{ opacity: 0.35; }}
+window.tl .seg {{
+  background: alpha({c['surface_alt']}, 0.55); border-radius: {max(4, r // 2 + 2)}px; padding: 3px;
+  border: 1px solid {g['border']};
+}}
+window.tl .seg button {{ padding: 6px 4px; font-weight: 600; font-size: 12.5px; }}
+window.tl .seg button.active, window.tl .seg button.active label {{ background: {c['accent']}; color: {c['on_accent']}; }}
+window.tl .row {{ padding: 4px 2px; }}
+window.tl .chip {{ border: 1px solid {g['border']}; background: alpha({c['surface_alt']}, 0.45); }}
+window.tl .chip.active, window.tl .chip.active label, window.tl .chip:checked, window.tl .chip:checked label {{ background: {c['accent']}; color: {c['on_accent']}; }}
+window.tl scale trough {{ background: alpha({c['text']}, 0.12); min-height: 4px; border-radius: 99px; }}
+window.tl scale highlight {{ background: {c['accent']}; border-radius: 99px; }}
+window.tl scale slider {{ background: {c['text']}; min-width: 14px; min-height: 14px; margin: -5px; border-radius: 99px;
+  box-shadow: none; border: none; }}
+window.tl switch {{ background: alpha({c['text']}, 0.15); border: none; }}
+window.tl switch:checked {{ background: {c['accent']}; }}
+window.tl switch slider {{ background: {c['text']}; box-shadow: none; border: none; }}
+window.tl dropdown button, window.tl dropdown > button {{ border: 1px solid {g['border']};
+  background: alpha({c['surface_alt']}, 0.45); }}
+window.tl popover contents {{ background: {c['surface']}; border: 1px solid {g['border']}; color: {c['text']}; }}
+window.tl .qr {{ background: #ffffff; border-radius: 10px; padding: 6px; }}
+window.tl .pair-cover {{ background: rgba({g['rgb']}, 0.94); border-radius: {max(4, r - 6)}px; padding: 10px 12px; }}
+window.tl .url {{ font-family: "{theme['mono_font']}", monospace; font-size: 10.5px; color: {c['muted']}; }}
+window.tl .danger {{ color: {c['danger']}; }}
+window.tl expander-widget.section-exp {{ margin-top: 8px; border-top: 1px solid alpha({c['text']}, 0.07); }}
+window.tl expander-widget.section-exp > box > title {{ padding: 10px 2px 6px 2px; }}
+window.tl expander-widget.section-exp > box > title label {{ font-size: 13px; font-weight: 600; color: {c['text_secondary']}; }}
+window.tl expander-widget.section-exp > box > title:hover label {{ color: {c['text']}; }}
+window.tl expander-widget.section-exp > box > title arrow {{ color: {c['muted']}; min-width: 14px; margin-right: 4px; }}
+window.tl levelbar trough {{ background: alpha({c['text']}, 0.10); border: none; border-radius: 99px; min-height: 5px; padding: 0; }}
+window.tl levelbar block {{ border-radius: 99px; min-height: 5px; border: none; }}
+window.tl levelbar block.tl-ok {{ background: {theme.get('bar', {}).get('active') or c['success']}; }}
+window.tl levelbar block.tl-hot {{ background: {c['accent']}; }}
+window.tl levelbar block.tl-clip {{ background: {c['danger']}; }}
+window.tl levelbar block.empty {{ background: transparent; }}
+window.tl .request {{ padding: 8px 8px 8px 12px; border-radius: {max(4, r // 2 + 2)}px;
+  background: alpha({c['accent']}, 0.12); border: 1px solid alpha({c['accent']}, 0.35); }}
+"""
+
+
+def label(text: str, css: str | None = None, xalign: float = 0.0, ellipsize: bool = False) -> Gtk.Label:
+    lab = Gtk.Label(label=text, xalign=xalign)
+    if css:
+        for cls in css.split():
+            lab.add_css_class(cls)
+    if ellipsize:
+        lab.set_ellipsize(Pango.EllipsizeMode.END)
+        lab.set_hexpand(True)
+    return lab
+
+
+class Segmented(Gtk.Box):
+    """Row of exclusive buttons (like a macOS segmented control)."""
+
+    def __init__(self, options: list[tuple[str, str]], on_pick):
+        super().__init__(spacing=3, homogeneous=True)
+        self.add_css_class("seg")
+        self.buttons: dict[str, Gtk.Button] = {}
+        self.on_pick = on_pick
+        for key, text in options:
+            b = Gtk.Button(label=text)
+            b.connect("clicked", lambda _b, k=key: self.on_pick(k))
+            self.buttons[key] = b
+            self.append(b)
+
+    def set_active(self, key: str | None) -> None:
+        for k, b in self.buttons.items():
+            if k == key:
+                b.add_css_class("active")
+            else:
+                b.remove_css_class("active")
+
+    def set_available(self, keys: set[str] | None) -> None:
+        for k, b in self.buttons.items():
+            b.set_sensitive(keys is None or k in keys)
+
+
+# ------------------------------------------------------------------------------------- panel
+class Panel(Gtk.Application):
+    WIDTH = 420
+    PREVIEW_W = WIDTH - 32   # card padding; the texture is fetched at this size so it never widens the card
+
+    def __init__(self, open_pairing: bool = False):
+        super().__init__(application_id="io.github.tuxlens.panel", flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
+        self.open_pairing = open_pairing
+        self.window = None
+        self.status: dict | None = None
+        self.theme_id = None
+        self.css_provider = Gtk.CssProvider()
+        self._updating = False
+        self._preview_running = False
+        self._zoom_timer = 0
+
+    # -- lifecycle --------------------------------------------------------------------------
+    def do_activate(self):
+        if self.window is not None:     # clicking the bar icon again closes it
+            self.quit()
+            return
+        Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), self.css_provider,
+                                                  Gtk.STYLE_PROVIDER_PRIORITY_USER + 1)
+        self.apply_theme(self.initial_theme())
+        self.build_window()
+        self.window.present()
+        self.refresh()
+        GLib.timeout_add(1000, self.refresh)
+        self._preview_running = True
+        threading.Thread(target=self.preview_loop, daemon=True).start()
+        if self.open_pairing:
+            self.toggle_pair()
+
+    def do_shutdown(self):
+        self._preview_running = False
+        Gtk.Application.do_shutdown(self)
+
+    def initial_theme(self) -> str:
+        try:
+            settings = api("GET", "/status")["settings"]
+        except (OSError, KeyError, ValueError):
+            return themes.DEFAULT_THEME
+        use_language(settings.get("language"))
+        return settings.get("theme", themes.DEFAULT_THEME)
+
+    def apply_theme(self, theme_id: str) -> None:
+        if theme_id == self.theme_id:
+            return
+        self.theme_id = theme_id
+        self.css_provider.load_from_string(build_css(themes.load(theme_id)) + themes.extra_css())
+
+    # -- window -----------------------------------------------------------------------------
+    def build_window(self):
+        win = Gtk.ApplicationWindow(application=self, title="TuxLens")
+        win.add_css_class("tl")
+        win.set_decorated(False)
+        self.window = win
+        if LayerShell is not None and LayerShell.is_supported():
+            LayerShell.init_for_window(win)
+            LayerShell.set_namespace(win, "tuxlens")
+            LayerShell.set_layer(win, LayerShell.Layer.OVERLAY)
+            LayerShell.set_keyboard_mode(win, LayerShell.KeyboardMode.ON_DEMAND)
+            LayerShell.set_exclusive_zone(win, -1)
+            for edge in (LayerShell.Edge.TOP, LayerShell.Edge.BOTTOM, LayerShell.Edge.LEFT, LayerShell.Edge.RIGHT):
+                LayerShell.set_anchor(win, edge, True)
+        else:
+            win.set_default_size(self.WIDTH + 40, 760)
+
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self.on_key)
+        win.add_controller(keys)
+
+        backdrop = Gtk.Box(hexpand=True, vexpand=True)
+        win.set_child(backdrop)
+        click = Gtk.GestureClick(button=0)
+        click.connect("pressed", self.on_backdrop_click, backdrop)
+        backdrop.add_controller(click)
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, halign=Gtk.Align.END, valign=Gtk.Align.START,
+                       hexpand=True)
+        card.add_css_class("card")
+        card.set_size_request(self.WIDTH, -1)
+        margin = int(os.environ.get("TUXLENS_PANEL_MARGIN", "10"))
+        card.set_margin_top(int(os.environ.get("TUXLENS_PANEL_TOP", "48")))
+        card.set_margin_end(margin)
+        backdrop.append(card)
+        self.card = card
+
+        # header
+        header = Gtk.Box(spacing=10)
+        icon = Gtk.Image.new_from_file(str(REPO / "web" / "icon.svg"))
+        icon.set_pixel_size(34)
+        header.append(icon)
+        texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True, valign=Gtk.Align.CENTER)
+        texts.append(label("TuxLens", "title"))
+        sub = Gtk.Box()
+        self.dot = Gtk.Box(valign=Gtk.Align.CENTER)
+        self.dot.add_css_class("dot")
+        sub.append(self.dot)
+        self.subtitle = label("…", "subtitle", ellipsize=True)
+        sub.append(self.subtitle)
+        texts.append(sub)
+        header.append(texts)
+        close = Gtk.Button(icon_name="window-close-symbolic", valign=Gtk.Align.CENTER, tooltip_text=S["close"])
+        close.connect("clicked", lambda _b: self.quit())
+        header.append(close)
+        card.append(header)
+
+        # Everything below the header scrolls if the monitor is too short for the whole card.
+        scroller = Gtk.ScrolledWindow(propagate_natural_height=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
+        scroller.set_max_content_height(self.max_body_height())
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        scroller.set_child(body)
+        card.append(scroller)
+
+        # pending pairing requests (accept / reject)
+        self.requests_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=10, visible=False)
+        body.append(self.requests_box)
+        self._requests_key = None
+
+        # preview
+        overlay = Gtk.Overlay(margin_top=12)
+        self.picture = Gtk.Picture(content_fit=Gtk.ContentFit.COVER, can_shrink=True, hexpand=False)
+        self.picture.add_css_class("preview")
+        self.picture.set_size_request(self.PREVIEW_W, self.PREVIEW_W * 9 // 16)
+        overlay.set_child(self.picture)
+        self.preview_empty = label(S["no_preview"], "preview-empty", xalign=0.5)
+        self.preview_empty.set_halign(Gtk.Align.CENTER)
+        self.preview_empty.set_valign(Gtk.Align.CENTER)
+        overlay.add_overlay(self.preview_empty)
+        self.preview_overlay = overlay
+        body.append(overlay)
+        self.stats = label("", "stats")
+        self.stats.set_margin_top(6)
+        body.append(self.stats)
+
+        # camera
+        sec = self.section(body, S["camera"], "camera", True)
+        source_row = Gtk.Box(spacing=10, margin_bottom=8)
+        source_row.add_css_class("row")
+        source_row.append(label(S["source"], "muted", ellipsize=True))
+        self.source_ids: list[str] = []
+        self.source_model = Gtk.StringList()
+        self.source_drop = Gtk.DropDown(model=self.source_model)
+        self.source_drop.connect("notify::selected", self.on_source)
+        source_row.append(self.source_drop)
+        sec.append(source_row)
+        self.cameras = Segmented([(k, S[k]) for k in CAMERA_ORDER], lambda k: self.set({"camera": k}))
+        sec.append(self.cameras)
+
+        zoom_row = Gtk.Box(spacing=10, margin_top=8)
+        zoom_row.add_css_class("row")
+        zoom_row.append(label(S["zoom"], "muted"))
+        self.zoom = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 1, 10, 0.1)
+        self.zoom.set_hexpand(True)
+        self.zoom.set_draw_value(False)
+        self.zoom.connect("value-changed", self.on_zoom)
+        zoom_row.append(self.zoom)
+        self.zoom_value = label("1.0×", "stats")
+        self.zoom_value.set_width_chars(5)
+        zoom_row.append(self.zoom_value)
+        sec.append(zoom_row)
+
+        torch_row = Gtk.Box(spacing=10)
+        torch_row.add_css_class("row")
+        torch_row.append(label(S["torch"], "muted", ellipsize=True))
+        self.torch = Gtk.Switch(valign=Gtk.Align.CENTER)
+        self.torch.connect("state-set", lambda _s, on: (self.set({"torch": on}) if not self._updating else None, False)[1])
+        torch_row.append(self.torch)
+        sec.append(torch_row)
+
+        self.camctl_box = self.section(body, S["cam_settings"], "camctl", True)
+        self.camctl_key = None
+        sec = self.section(body, S["audio"], "audio", False)
+        mic_row = Gtk.Box(spacing=10)
+        mic_row.add_css_class("row")
+        mic_texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True)
+        mic_texts.append(label(S["mic"], ellipsize=True))
+        self.mic_hint = label(S["mic_hint"], "muted", ellipsize=True)
+        mic_texts.append(self.mic_hint)
+        mic_row.append(mic_texts)
+        self.mic = Gtk.Switch(valign=Gtk.Align.CENTER)
+        self.mic.connect("state-set", lambda _s, on: (self.set({"mic": on}) if not self._updating else None, False)[1])
+        mic_row.append(self.mic)
+        sec.append(mic_row)
+
+        audio_box = sec
+        level_row = Gtk.Box(spacing=10)
+        level_row.add_css_class("row")
+        level_row.append(label(S["level"], "muted"))
+        self.level = Gtk.LevelBar(min_value=0, max_value=60, hexpand=True, valign=Gtk.Align.CENTER)
+        self.level.set_mode(Gtk.LevelBarMode.CONTINUOUS)
+        for name in list(("low", "high", "full")):
+            self.level.remove_offset_value(name)
+        self.level.add_offset_value("tl-ok", 48)        # up to −12 dBFS
+        self.level.add_offset_value("tl-hot", 57)       # up to −3 dBFS
+        self.level.add_offset_value("tl-clip", 60)
+        level_row.append(self.level)
+        self.level_value = label("—", "stats")
+        self.level_value.set_width_chars(7)
+        level_row.append(self.level_value)
+        audio_box.append(level_row)
+        gain_row = Gtk.Box(spacing=10)
+        gain_row.add_css_class("row")
+        gain_row.append(label(S["gain"], "muted"))
+        self.gain = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, -12, 18, 1)
+        self.gain.set_hexpand(True)
+        self.gain.set_draw_value(False)
+        self.gain.add_mark(0, Gtk.PositionType.BOTTOM, None)
+        self.gain.connect("value-changed", self.on_gain)
+        gain_row.append(self.gain)
+        self.gain_value = label("0 dB", "stats")
+        self.gain_value.set_width_chars(7)
+        gain_row.append(self.gain_value)
+        audio_box.append(gain_row)
+        self.audio_switches = {}
+        for key, text in (("mic_mute", S["mute"]), ("mic_echo", S["echo"]), ("mic_noise", S["noise"]),
+                          ("mic_agc", S["agc"])):
+            row = Gtk.Box(spacing=10)
+            row.add_css_class("row")
+            row.append(label(text, ellipsize=True))
+            sw = Gtk.Switch(valign=Gtk.Align.CENTER)
+            sw.connect("state-set", lambda _s, on, k=key: (self.set({k: on}) if not self._updating else None, False)[1])
+            row.append(sw)
+            self.audio_switches[key] = sw
+            audio_box.append(row)
+        audio_box.append(label(S["echo_hint"], "muted"))
+        self.audio_controls = [level_row, gain_row, *self.audio_switches.values()]
+        GLib.timeout_add(150, self.poll_level)
+
+        # picture
+        sec = self.section(body, S["image"], "image", False)
+        self.mode = Segmented([("fast", S["fast"]), ("sharp", S["sharp"])], self.on_mode)
+        sec.append(self.mode)
+        rot_row = Gtk.Box(spacing=6, margin_top=8)
+        rot_row.add_css_class("row")
+        rot_row.append(label(S["rotation"], "muted", ellipsize=True))
+        self.rot_label = label(S["auto"], "stats")
+        rot_row.append(self.rot_label)
+        for icon_name, delta in (("object-rotate-left-symbolic", -90), ("object-rotate-right-symbolic", 90)):
+            b = Gtk.Button(icon_name=icon_name)
+            b.add_css_class("chip")
+            b.connect("clicked", lambda _b, d=delta: self.rotate(d))
+            rot_row.append(b)
+        self.mirror = Gtk.ToggleButton(label=S["mirror"])
+        self.mirror.add_css_class("chip")
+        self.mirror.connect("toggled", lambda b: None if self._updating else self.set({"mirror": b.get_active()}))
+        rot_row.append(self.mirror)
+        sec.append(rot_row)
+
+        # effects
+        sec = self.section(body, S["effects"], "effects", False)
+        self.background = Segmented([("none", S["bg_none"]), ("blur", S["bg_blur"]), ("image", S["bg_image"])],
+                                    lambda k: self.set({"effect": k}) if k != "image" or self.has_image()
+                                    else self.choose_image())
+        sec.append(self.background)
+        self.strength_row = Gtk.Box(spacing=10, margin_top=8)
+        self.strength_row.add_css_class("row")
+        self.strength_row.append(label(S["strength"], "muted"))
+        self.strength = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 1, 0.05)
+        self.strength.set_hexpand(True)
+        self.strength.set_draw_value(False)
+        self.strength.connect("value-changed", self.on_strength)
+        self.strength_row.append(self.strength)
+        sec.append(self.strength_row)
+        self.image_row = Gtk.Box(spacing=10, margin_top=8)
+        self.image_row.add_css_class("row")
+        self.image_name = label(S["no_image"], "muted", ellipsize=True)
+        self.image_row.append(self.image_name)
+        pick = Gtk.Button(label=S["choose"])
+        pick.add_css_class("chip")
+        pick.connect("clicked", lambda _b: self.choose_image())
+        self.image_row.append(pick)
+        sec.append(self.image_row)
+        framing_row = Gtk.Box(spacing=10, margin_top=6)
+        framing_row.add_css_class("row")
+        texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True)
+        texts.append(label(S["framing"], ellipsize=True))
+        texts.append(label(S["framing_hint"], "muted", ellipsize=True))
+        framing_row.append(texts)
+        self.framing = Gtk.Switch(valign=Gtk.Align.CENTER)
+        self.framing.connect("state-set", lambda _s, on: (self.set({"framing": on}) if not self._updating else None, False)[1])
+        framing_row.append(self.framing)
+        sec.append(framing_row)
+        filter_row = Gtk.Box(spacing=10)
+        filter_row.add_css_class("row")
+        filter_row.append(label(S["filter"], "muted", ellipsize=True))
+        self.filter_keys = ["none", "mono", "warm", "cool", "vivid"]
+        self.filter_drop = Gtk.DropDown.new_from_strings([S["f_" + k] for k in self.filter_keys])
+        self.filter_drop.connect("notify::selected", self.on_filter)
+        filter_row.append(self.filter_drop)
+        sec.append(filter_row)
+
+        # look
+        sec = self.section(body, S["look"], "look", False)
+        look_row = Gtk.Box(spacing=10)
+        look_row.add_css_class("row")
+        look_row.append(label(S["theme"], "muted", ellipsize=True))
+        self.theme_names = themes.available()
+        self.theme_drop = Gtk.DropDown.new_from_strings([themes.load(t).get("name", t) for t in self.theme_names])
+        self.theme_drop.connect("notify::selected", self.on_theme)
+        look_row.append(self.theme_drop)
+        sec.append(look_row)
+
+        # pairing
+        self.pair_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, visible=False,
+                                halign=Gtk.Align.FILL, valign=Gtk.Align.FILL)
+        self.pair_box.add_css_class("pair-cover")
+        self.pair_box.append(label(S["pair_help"], "muted", xalign=0.5))
+        self.qr = Gtk.Picture(can_shrink=True, halign=Gtk.Align.CENTER, vexpand=True,
+                              content_fit=Gtk.ContentFit.CONTAIN)
+        self.qr.add_css_class("qr")
+        self.pair_box.append(self.qr)
+        self.pair_url = label("", "url", xalign=0.5)
+        self.pair_url.set_selectable(True)
+        self.pair_url.set_wrap(True)
+        self.pair_box.append(self.pair_url)
+        self.preview_overlay.add_overlay(self.pair_box)
+
+        footer = Gtk.Box(spacing=6, margin_top=12)
+        pair = Gtk.Button(label=S["pair"])
+        pair.add_css_class("chip")
+        pair.connect("clicked", lambda _b: self.toggle_pair())
+        footer.append(pair)
+        reload_btn = Gtk.Button(label=S["reload"])
+        reload_btn.add_css_class("chip")
+        reload_btn.connect("clicked", lambda _b: api_async("POST", "/phone/reload"))
+        footer.append(reload_btn)
+        self.footer_note = label("", "muted danger", ellipsize=True, xalign=1.0)
+        footer.append(self.footer_note)
+        card.append(footer)
+
+    # -- events -----------------------------------------------------------------------------
+    def on_key(self, _ctrl, keyval, _code, _state):
+        if keyval == Gdk.KEY_Escape:
+            self.quit()
+            return True
+        return False
+
+    def on_backdrop_click(self, _gesture, _n, x, y, backdrop):
+        if backdrop.pick(x, y, Gtk.PickFlags.DEFAULT) is backdrop:
+            self.quit()
+
+    def set(self, changes: dict) -> None:
+        if self._updating:
+            return
+        api_async("POST", "/settings", changes, lambda _r: self.refresh() and False)
+
+    def on_zoom(self, scale):
+        self.zoom_value.set_text(f"{scale.get_value():.1f}×")
+        if self._updating:
+            return
+        if self._zoom_timer:
+            GLib.source_remove(self._zoom_timer)
+        # Debounce: the phone re-applies constraints on each change.
+        self._zoom_timer = GLib.timeout_add(120, self._send_zoom)
+
+    def _send_zoom(self):
+        self._zoom_timer = 0
+        key = "digital_zoom" if self.is_local() else "zoom"
+        self.set({key: round(self.zoom.get_value(), 2)})
+        return False
+
+    def is_local(self) -> bool:
+        return ((self.status or {}).get("settings") or {}).get("source", "phone") != "phone"
+
+    def on_source(self, drop, _pspec):
+        if self._updating:
+            return
+        idx = drop.get_selected()
+        if 0 <= idx < len(self.source_ids):
+            self.set({"source": self.source_ids[idx]})
+
+    def show_sources(self, sources: list[dict], current: str) -> None:
+        ids = [src["id"] for src in sources]
+        names = []
+        for src in sources:
+            name = src["name"]
+            if src["kind"] == "phone" and not src.get("connected"):
+                name += f" ({S['not_connected']})"
+            names.append(name)
+        if ids != self.source_ids or names != [self.source_model.get_string(i) for i in range(self.source_model.get_n_items())]:
+            self.source_ids = ids
+            self.source_model.splice(0, self.source_model.get_n_items(), names)
+        if current in ids:
+            self.source_drop.set_selected(ids.index(current))
+
+    # -- local camera controls (built from what the camera offers) ---------------------------
+    def load_camera_controls(self, force: bool = False) -> None:
+        def show(data):
+            self._updating = True
+            try:
+                self.build_camera_controls((data or {}).get("controls") or [])
+            finally:
+                self._updating = False
+            return False
+        api_async("GET", "/camera/controls", None, show)
+
+    def build_camera_controls(self, controls: list[dict]) -> None:
+        box = self.camctl_box
+        while (child := box.get_first_child()) is not None:
+            box.remove(child)
+        for c in controls:
+            row = Gtk.Box(spacing=10)
+            row.add_css_class("row")
+            row.append(label(S["ctl"].get(c["name"], c["name"]), "muted" if c["type"] == "int" else None, ellipsize=True))
+            if c["type"] == "bool":
+                w = Gtk.Switch(valign=Gtk.Align.CENTER, active=bool(c.get("value")))
+                w.connect("state-set", lambda _w, on, n=c["name"]: (self.set_control(n, int(on)), False)[1])
+            elif c["type"] == "menu":
+                opts = c.get("options") or []
+                w = Gtk.DropDown.new_from_strings([S["menu"].get(o["label"], o["label"]) for o in opts])
+                values = [o["value"] for o in opts]
+                if c.get("value") in values:
+                    w.set_selected(values.index(c["value"]))
+                w.connect("notify::selected", lambda d, _p, n=c["name"], v=values:
+                          self.set_control(n, v[d.get_selected()]) if 0 <= d.get_selected() < len(v) else None)
+            else:
+                lo, hi = c.get("min", 0), c.get("max", 100)
+                w = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, lo, hi, max(1, c.get("step", 1)))
+                w.set_draw_value(False)
+                w.set_hexpand(True)
+                w.set_value(c.get("value", lo))
+                if "default" in c:
+                    w.add_mark(c["default"], Gtk.PositionType.BOTTOM, None)
+                w.connect("value-changed", lambda sc, n=c["name"]: self.debounce_control(n, round(sc.get_value())))
+            w.set_sensitive(not c.get("inactive"))
+            row.append(w)
+            box.append(row)
+
+    def debounce_control(self, name: str, value: int) -> None:
+        if self._updating:
+            return
+        timers = self.__dict__.setdefault("_ctl_timers", {})
+        if timers.get(name):
+            GLib.source_remove(timers[name])
+        timers[name] = GLib.timeout_add(120, lambda: (timers.pop(name, None), self.set_control(name, value), False)[2])
+
+    def set_control(self, name: str, value: int) -> None:
+        if self._updating:
+            return
+        # Re-read afterwards: some controls enable others (manual exposure → exposure time).
+        api_async("POST", "/camera/controls", {name: value},
+                  lambda data: (self._updating_build(data), False)[1])
+
+    def _updating_build(self, data):
+        self._updating = True
+        try:
+            self.build_camera_controls((data or {}).get("controls") or [])
+        finally:
+            self._updating = False
+
+    def on_mode(self, key):
+        self.set({"capture": "720p", "fps": 60} if key == "fast" else {"capture": "1080p", "fps": 30})
+
+    def rotate(self, delta):
+        current = (self.status or {}).get("settings", {}).get("rotate", 0)
+        self.set({"rotate": (current + delta) % 360})
+
+    def on_theme(self, drop, _pspec):
+        if self._updating:
+            return
+        idx = drop.get_selected()
+        if 0 <= idx < len(self.theme_names):
+            theme_id = self.theme_names[idx]
+            self.apply_theme(theme_id)
+            self.set({"theme": theme_id})
+
+    def toggle_pair(self):
+        if self.pair_box.get_visible():
+            self.pair_box.set_visible(False)
+            return
+
+        def show(urls):
+            if not urls:
+                return False
+            self.pair_url.set_text(urls["setup"])
+            png = None
+            if shutil.which("qrencode"):
+                png = subprocess.run(["qrencode", "-o", "-", "-t", "PNG", "-s", "4", "-m", "1", urls["setup"]],
+                                     capture_output=True).stdout
+            if png:
+                self.qr.set_paintable(Gdk.Texture.new_from_bytes(GLib.Bytes.new(png)))
+                self.qr.set_visible(True)
+            else:
+                self.qr.set_visible(False)
+            self.pair_box.set_visible(True)
+            return False
+        api_async("GET", "/pair", None, show)
+
+    # -- state ------------------------------------------------------------------------------
+    def refresh(self):
+        if self.window is None:
+            return False
+        api_async("GET", "/status", None, self.update)
+        return True
+
+    def update(self, st):
+        self._updating = True
+        try:
+            self._update(st)
+        finally:
+            self._updating = False
+        return False
+
+    def show_requests(self, requests: list[dict]) -> None:
+        key = tuple(r["id"] for r in requests)
+        if key == self._requests_key:
+            return
+        self._requests_key = key
+        while (child := self.requests_box.get_first_child()) is not None:
+            self.requests_box.remove(child)
+        for req in requests:
+            row = Gtk.Box(spacing=8)
+            row.add_css_class("request")
+            row.append(label(S["wants"].format(name=req["name"], address=req["address"]), ellipsize=True))
+            for text, approve in ((S["reject"], False), (S["accept"], True)):
+                b = Gtk.Button(label=text)
+                b.add_css_class("chip")
+                if approve:
+                    b.add_css_class("active")
+                b.connect("clicked", lambda _b, i=req["id"], a=approve:
+                          api_async("POST", "/pair/decide", {"id": i, "approve": a}, lambda _r: self.refresh() and False))
+                row.append(b)
+            self.requests_box.append(row)
+        self.requests_box.set_visible(bool(requests))
+
+    def _update(self, st):
+        self.status = st
+        self.show_requests((st or {}).get("pair_requests") or [])
+        for cls in ("live", "error", "connected", "holding"):
+            self.dot.remove_css_class(cls)
+        if st is None:
+            self.subtitle.set_text(S["off"])
+            self.footer_note.set_text(S["start_hint"])
+            self.dot.add_css_class("error")
+            self.card_set_sensitive(False)
+            return
+        self.footer_note.set_text("")
+        self.card_set_sensitive(True)
+        s = st["settings"]
+        phone = st["phone"]
+        stats = st["stats"]
+        state = st["state"]
+        if state == "error":
+            self.subtitle.set_text(f"{S['error']}: {st.get('error')}")
+            self.dot.add_css_class("error")
+        elif state in ("live", "holding"):
+            total = stats["stages_ms"]["total"]["p50"]
+            name = phone.get("label") or s["camera"]
+            if s.get("source", "phone") != "phone":
+                name = next((src["name"] for src in st.get("sources") or [] if src["id"] == s["source"]), s["source"])
+            self.subtitle.set_text(f"{S[state]} · {name}")
+            self.dot.add_css_class(state)
+            ph = stats.get("phone") or {}
+            src = st.get("source", "")
+            self.stats.set_text(f"{stats['fps_out']:.0f} fps · {S['latency']} {total:.0f} ms · "
+                                f"{(ph.get('kbps') or 0) / 1000:.1f} Mbps · {src.split(' ')[0]}")
+        elif phone.get("connected"):
+            self.subtitle.set_text(S["connected"])
+            self.dot.add_css_class("connected")
+        else:
+            self.subtitle.set_text(S["idle"])
+        if state not in ("live", "holding"):
+            self.stats.set_text("")
+
+        local = s.get("source", "phone") != "phone"
+        self.show_sources(st.get("sources") or [], s.get("source", "phone"))
+        available = set(phone.get("available") or []) or None
+        self.cameras.set_available(set() if local else available)
+        self.cameras.set_active(None if local else s["camera"])
+        self.sections["camctl"].set_visible(local)
+        if local and self.camctl_key != s["source"]:
+            self.camctl_key = s["source"]
+            self.load_camera_controls()
+        elif not local:
+            self.camctl_key = None
+
+        if local:      # digital zoom (crop) for cameras without optical zoom
+            self.zoom.set_range(1.0, 4.0)
+            self.zoom.set_value(float(s.get("digital_zoom", 1.0)))
+            self.zoom_value.set_text(f"{float(s.get('digital_zoom', 1.0)):.1f}×")
+        else:
+            zoom = phone.get("zoom") or {}
+            lo, hi = float(zoom.get("min") or 1), float(zoom.get("max") or 10)
+            self.zoom.set_range(lo, max(lo + 0.1, min(hi, 10.0)))
+            self.zoom.set_value(float(s["zoom"]))
+            self.zoom_value.set_text(f"{float(s['zoom']):.1f}×")
+        self.torch.set_sensitive(not local and bool(phone.get("torch", True)))
+        self.torch.set_active(bool(s["torch"]))
+
+        fast = s.get("capture") == "720p" or (s.get("fps", 30) >= 50)
+        self.mode.set_active("fast" if fast else "sharp")
+        extra = s.get("rotate", 0)
+        auto = phone.get("rotation")
+        self.rot_label.set_text(S["auto"] + (f" {auto}°" if auto is not None else "") + (f" {extra:+d}°" if extra else ""))
+        self.mirror.set_active(bool(s.get("mirror")))
+
+        self.mic.set_active(bool(s.get("mic")))
+        for w in self.audio_controls:
+            w.set_sensitive(bool(s.get("mic")))
+        self.gain.set_value(float(s.get("mic_gain_db", 0)))
+        for key, sw in self.audio_switches.items():
+            sw.set_active(bool(s.get(key, key != "mic_mute")))
+        mic = st.get("mic") or {}
+        if mic.get("error"):
+            self.mic_hint.set_text(mic["error"])
+        elif mic.get("streaming"):
+            self.mic_hint.set_text(f"{S['mic_live']} · {mic.get('backlog_ms', 0):.0f} ms")
+        else:
+            self.mic_hint.set_text(S["mic_hint"])
+        self.background.set_active(s.get("effect", "none"))
+        self.strength_row.set_visible(s.get("effect") == "blur")
+        self.strength.set_value(float(s.get("blur_strength", 0.6)))
+        self.image_row.set_visible(s.get("effect") == "image")
+        img = s.get("background_image") or ""
+        self.image_name.set_text(os.path.basename(img) if img else S["no_image"])
+        self.framing.set_active(bool(s.get("framing")))
+        if s.get("filter") in self.filter_keys:
+            self.filter_drop.set_selected(self.filter_keys.index(s["filter"]))
+
+        if s["theme"] in self.theme_names:
+            self.theme_drop.set_selected(self.theme_names.index(s["theme"]))
+            self.apply_theme(s["theme"])
+
+    UI_STATE = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "tuxlens" / "panel.json"
+
+    def section(self, parent: Gtk.Box, title: str, key: str, default_open: bool) -> Gtk.Box:
+        """Collapsible section; remembers whether it was left open."""
+        if not hasattr(self, "sections"):
+            self.sections = {}
+            try:
+                self._ui_state = json.loads(self.UI_STATE.read_text())
+            except (OSError, ValueError):
+                self._ui_state = {}
+        exp = Gtk.Expander(label=title, expanded=self._ui_state.get(key, default_open))
+        exp.add_css_class("section-exp")
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, margin_top=4)
+        exp.set_child(box)
+        exp.connect("notify::expanded", lambda e, _p, k=key: self._save_section(k, e.get_expanded()))
+        parent.append(exp)
+        self.sections[key] = exp
+        return box
+
+    def _save_section(self, key: str, expanded: bool) -> None:
+        self._ui_state[key] = expanded
+        try:
+            self.UI_STATE.parent.mkdir(parents=True, exist_ok=True)
+            self.UI_STATE.write_text(json.dumps(self._ui_state))
+        except OSError:
+            pass
+
+    def max_body_height(self) -> int:
+        """Shortest monitor minus the bar offset and the header, so the card never runs off screen."""
+        heights = []
+        monitors = Gdk.Display.get_default().get_monitors()
+        for i in range(monitors.get_n_items()):
+            heights.append(monitors.get_item(i).get_geometry().height)
+        top = int(os.environ.get("TUXLENS_PANEL_TOP", "48"))
+        return max(320, (min(heights) if heights else 900) - top - 150)
+
+    def on_gain(self, scale):
+        value = round(scale.get_value())
+        self.gain_value.set_text(f"{value:+d} dB" if value else "0 dB")
+        if self._updating:
+            return
+        if getattr(self, "_gain_timer", 0):
+            GLib.source_remove(self._gain_timer)
+        self._gain_timer = GLib.timeout_add(100, lambda: (self.set({"mic_gain_db": value}),
+                                                          setattr(self, "_gain_timer", 0), False)[2])
+
+    def poll_level(self):
+        if self.window is None:
+            return False
+        if not self.sections["audio"].get_expanded():
+            return True
+
+        def show(data):
+            if data and data.get("streaming"):
+                db = max(-60.0, min(0.0, data["level_db"]))
+                self.level.set_value(db + 60)
+                self.level_value.set_text(f"{db:.0f} dB")
+            else:
+                self.level.set_value(0)
+                self.level_value.set_text("—")
+            return False
+        api_async("GET", "/mic/level", None, show)
+        return True
+
+    def has_image(self) -> bool:
+        path = ((self.status or {}).get("settings") or {}).get("background_image")
+        return bool(path) and os.path.exists(path)
+
+    def choose_image(self):
+        """The file chooser is a normal window: hide the overlay panel while it is open."""
+        dialog = Gtk.FileDialog(title=S["choose"], modal=False)
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        flt = Gtk.FileFilter()
+        flt.set_name(S["images"])
+        flt.add_mime_type("image/*")
+        filters.append(flt)
+        dialog.set_filters(filters)
+        pictures = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_PICTURES)
+        if pictures:
+            dialog.set_initial_folder(Gio.File.new_for_path(pictures))
+        self.window.set_visible(False)
+
+        def done(dlg, result):
+            try:
+                gfile = dlg.open_finish(result)
+            except GLib.Error:
+                gfile = None
+            self.window.set_visible(True)
+            if gfile is not None and gfile.get_path():
+                self.set({"effect": "image", "background_image": gfile.get_path()})
+        dialog.open(None, None, done)
+
+    def on_strength(self, scale):
+        if self._updating:
+            return
+        if getattr(self, "_strength_timer", 0):
+            GLib.source_remove(self._strength_timer)
+        self._strength_timer = GLib.timeout_add(120, lambda: (self.set({"blur_strength": round(scale.get_value(), 2)}),
+                                                              setattr(self, "_strength_timer", 0), False)[2])
+
+    def on_filter(self, drop, _pspec):
+        if self._updating:
+            return
+        idx = drop.get_selected()
+        if 0 <= idx < len(self.filter_keys):
+            self.set({"filter": self.filter_keys[idx]})
+
+    def card_set_sensitive(self, on: bool):
+        for w in (self.cameras, self.zoom, self.torch, self.mode, self.mirror):
+            w.set_sensitive(on)
+
+    # -- preview ----------------------------------------------------------------------------
+    def preview_loop(self):
+        import time
+        # Logical size on purpose: a bigger texture would raise the picture's natural width.
+        width = self.PREVIEW_W
+        while self._preview_running:
+            started = time.monotonic()
+            try:
+                status, headers, data = api("GET", f"/preview?w={width & ~1}", raw=True)
+            except OSError:
+                status, headers, data = 0, {}, b""
+            if status == 200 and data:
+                w, h = int(headers.get("X-Width", 0)), int(headers.get("X-Height", 0))
+                if w and h and len(data) == w * h * 3:
+                    GLib.idle_add(self.show_frame, w, h, data)
+            else:
+                GLib.idle_add(self.show_frame, 0, 0, None)
+            time.sleep(max(0.0, 1 / 12 - (time.monotonic() - started)))
+
+    def show_frame(self, w, h, data):
+        if data is None:
+            self.picture.set_paintable(None)
+            self.preview_empty.set_visible(True)
+            return False
+        texture = Gdk.MemoryTexture.new(w, h, Gdk.MemoryFormat.R8G8B8, GLib.Bytes.new(data), w * 3)
+        self.picture.set_paintable(texture)
+        self.preview_empty.set_visible(False)
+        return False
+
+
+def main():
+    app = Panel(open_pairing="--pair" in sys.argv)
+    try:
+        from gi.repository import GLibUnix
+        GLibUnix.signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda: (app.quit(), False)[1])
+    except ImportError:
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda: (app.quit(), False)[1])
+    return app.run([sys.argv[0]])
+
+
+if __name__ == "__main__":
+    sys.exit(main())

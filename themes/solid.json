@@ -1,0 +1,30 @@
+{
+  "name": "Solid",
+  "description": "Niebla colors without transparency, for compositors without blur.",
+  "dark": true,
+  "colors": {
+    "background": "#141516",
+    "surface": "#1a1b1d",
+    "surface_alt": "#26282a",
+    "text": "#e4e6e7",
+    "text_secondary": "#c8ccd0",
+    "muted": "#8a8f93",
+    "accent": "#c8ccd0",
+    "on_accent": "#141516",
+    "danger": "#b8656a",
+    "success": "#a9b9a5"
+  },
+  "glass": {
+    "rgb": "26, 27, 29",
+    "alpha": 1.0,
+    "blur": 0,
+    "border": "rgba(255, 255, 255, 0.08)"
+  },
+  "radius": 12,
+  "font": "Inter",
+  "mono_font": "JetBrainsMono Nerd Font",
+  "bar": {
+    "icon": "#f4f5f6",
+    "active": "#5ce6a0"
+  }
+}

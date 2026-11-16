@@ -1,0 +1,21 @@
+{
+  "name": "Catppuccin Mocha",
+  "description": "Soothing pastel theme (palette: catppuccin.com, MIT).",
+  "dark": true,
+  "colors": {
+    "background": "#1e1e2e",
+    "surface": "#181825",
+    "surface_alt": "#313244",
+    "text": "#cdd6f4",
+    "text_secondary": "#bac2de",
+    "muted": "#7f849c",
+    "accent": "#cba6f7",
+    "on_accent": "#1e1e2e",
+    "danger": "#f38ba8",
+    "success": "#a6e3a1"
+  },
+  "glass": { "rgb": "30, 30, 46", "alpha": 0.6, "blur": 20, "border": "rgba(205, 214, 244, 0.1)" },
+  "radius": 14,
+  "font": "Inter",
+  "mono_font": "JetBrainsMono Nerd Font"
+}
